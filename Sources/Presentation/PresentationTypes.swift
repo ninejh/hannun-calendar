@@ -95,10 +95,17 @@ enum UserIntent: Sendable {
 @MainActor protocol BoardPresentation: AnyObject {
     var state: PresentationState { get }
     @discardableResult func send(_ intent: UserIntent) -> OperationHandle?
+    /// One explicit lookup of the original operation; nil means this presentation cannot expose its result.
+    @discardableResult func reconcile(_ id: UUID) -> Result<OperationStatus, AppFailure>?
     func subscribe(_ receive: @escaping @MainActor (PresentationChange) -> Void) -> ObservationToken
     func setDraft(_ key: DraftKey, value: DraftValue)
     func clearDraft(_ key: DraftKey)
     func flushNotes() async -> CommandReceipt
+}
+extension BoardPresentation {
+    @discardableResult func reconcile(_ id: UUID) -> Result<OperationStatus, AppFailure>? {
+        _ = send(.reconcile(id)); return nil
+    }
 }
 @MainActor protocol PresentationScheduler: AnyObject {
     func schedule(after seconds: TimeInterval, _ action: @escaping @MainActor () -> Void) -> ObservationToken

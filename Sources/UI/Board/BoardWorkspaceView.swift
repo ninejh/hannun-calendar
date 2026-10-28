@@ -5,7 +5,7 @@ import AppKit
     var moveSplit: (@MainActor (CGFloat) -> Void)?
     var endSplit: (@MainActor (Bool) -> Void)?
     private let feedbackSurfaces = (0..<9).map { _ in NativeCanvasPaintSurface(frame: .zero) }
-    private enum Feedback { case divider(String), sizeLabel(String), slotEdge }
+    private enum Feedback { case divider(String), slotEdge }
     private var feedbackPlans: [Feedback] = []
     private var feedbackDisposed = false
     private struct FeedbackKey: Equatable {
@@ -24,7 +24,6 @@ import AppKit
                 guard let self, self.feedbackPlans.indices.contains(index) else { return }
                 switch self.feedbackPlans[index] {
                 case .divider(let id): if let item = self.items.first(where: { $0.id == id }) { self.drawItem(item) }
-                case .sizeLabel(let id): if let item = self.items.first(where: { $0.id == id }) { self.paintSizeLabel(item) }
                 case .slotEdge: self.paintSlotFocus()
                 }
             }
@@ -46,9 +45,8 @@ import AppKit
         guard key != feedbackKey else { return }; feedbackKey = key
         var plans: [Feedback] = [], rectangles: [CGRect] = []
         for item in items {
-            guard let split = Self.split(item.id) else { continue }
+            guard Self.split(item.id) != nil else { continue }
             plans.append(.divider(item.id)); rectangles.append(item.rect.insetBy(dx: -NativeSize.focusOffset - NativeSize.focusWidth, dy: -NativeSize.focusOffset - NativeSize.focusWidth).integral)
-            if split == dragging { plans.append(.sizeLabel(item.id)); rectangles.append(sizeLabelRect(item).integral) }
         }
         if let slotFocusRect {
             let rect = slotFocusRect.insetBy(dx: -NativeSpace.sm, dy: -NativeSpace.sm).integral
@@ -113,26 +111,12 @@ import AppKit
         let selected = focus.keyboardFocus && focus.focusedID == FocusID(item.id)
         let active = selected || split == dragging || split == hoveredSplit
         theme.color(active ? .accentBlue : .textQuiet).setFill()
-        let width = NativeSpace.xxs, length = active ? (split == .column ? item.rect.height : item.rect.width) : min(NativeSize.toolbarHeight, split == .column ? item.rect.height : item.rect.width)
+        let width = active ? NativeSpace.xs : NativeSpace.xxs, length = min(NativeSize.toolbarHeight, split == .column ? item.rect.height : item.rect.width)
         let rect = split == .column ? CGRect(x: item.rect.midX - width / 2, y: item.rect.midY - length / 2, width: width, height: length) : CGRect(x: item.rect.midX - length / 2, y: item.rect.midY - width / 2, width: length, height: width)
         NSBezierPath(roundedRect: rect, xRadius: width / 2, yRadius: width / 2).fill()
         if selected {
-            theme.color(.accentBlue).setStroke(); let path = NSBezierPath(roundedRect: item.rect.insetBy(dx: -NativeSize.focusOffset, dy: -NativeSize.focusOffset), xRadius: NativeSpace.xxs, yRadius: NativeSpace.xxs); path.lineWidth = NativeSize.focusWidth; path.stroke()
+            theme.color(.accentBlue).setStroke(); let path = NSBezierPath(roundedRect: rect.insetBy(dx: -NativeSize.focusOffset, dy: -NativeSize.focusOffset), xRadius: NativeSpace.xxs, yRadius: NativeSpace.xxs); path.lineWidth = NativeSize.focusWidth; path.stroke()
         }
-    }
-    private func sizeLabelRect(_ item: NativeRenderItem) -> CGRect {
-        let width: CGFloat = 112, height = NativeSize.compactTarget
-        let x = min(max(bounds.minX, item.rect.midX + NativeSpace.md), max(bounds.minX, bounds.maxX - width))
-        let y = min(max(bounds.minY, item.rect.midY + NativeSpace.md), max(bounds.minY, bounds.maxY - height))
-        return CGRect(x: x, y: y, width: width, height: height)
-    }
-    private func paintSizeLabel(_ item: NativeRenderItem) {
-        let rect = sizeLabelRect(item)
-        theme.color(.popoverBg).setFill(); NSBezierPath(roundedRect: rect, xRadius: NativeRadius.input, yRadius: NativeRadius.input).fill()
-        theme.color(.lineStrong).setStroke(); let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: NativeRadius.input, yRadius: NativeRadius.input); border.lineWidth = 1; border.stroke()
-        let text = item.value ?? "", font = NativeFont.primary
-        let size = (text as NSString).size(withAttributes: [.font: font])
-        (text as NSString).draw(at: CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: NativeFont.attributes(font: font, color: theme.color(.textPrimary)))
     }
     // The structural workspace paints only through its bounded feedback surfaces.
     override func draw(_ dirtyRect: NSRect) {}

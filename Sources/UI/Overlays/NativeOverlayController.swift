@@ -15,7 +15,7 @@ import AppKit
             path.move(to: CGPoint(x: center.x - radius, y: center.y - radius)); path.line(to: CGPoint(x: center.x + radius, y: center.y + radius))
             path.move(to: CGPoint(x: center.x - radius, y: center.y + radius)); path.line(to: CGPoint(x: center.x + radius, y: center.y - radius)); path.stroke()
         } else if item.id == "overlay.heading" {
-            (item.label as NSString).draw(in: item.rect.insetBy(dx: NativeSpace.xs, dy: NativeSpace.xs), withAttributes: NativeFont.attributes(font: NativeFont.sectionHead, color: theme.color(.textPrimary)))
+            (item.label as NSString).draw(in: item.rect.insetBy(dx: NativeSpace.xs, dy: NativeSpace.xs), withAttributes: NativeFont.attributes(font: NativeFont.sectionHead, color: theme.color(.textPrimary), truncation: item.value == "wrapped-date" ? .byWordWrapping : .byTruncatingTail))
         } else if item.id == "overlay.error" {
             (item.label as NSString).draw(in: item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xs), withAttributes: NativeFont.attributes(font: NativeFont.body, color: theme.color(.danger), truncation: .byWordWrapping))
         } else { super.paint(item) }
@@ -265,9 +265,14 @@ import AppKit
         if shadowHost.frame != surface.frame { shadowHost.frame = surface.frame }
         if let layer = shadowHost.layer { shadow.update(in: layer, surfaceRect: shadowHost.bounds, appearance: theme.appearance, isFlipped: shadowHost.isFlipped) }
         notes.textColor = theme.color(.textPrimary); notes.insertionPointColor = theme.color(.textPrimary)
-        var headerItems = [NativeRenderItem(id: "overlay.heading", rect: CGRect(x: NativeSpace.lg, y: NativeSpace.sm, width: max(0, surface.bounds.width - NativeSpace.lg * 4), height: NativeSize.compactTarget), label: title, kind: .text),
+        let heading = title, headingWidth = max(0, surface.bounds.width - NativeSpace.lg * 4)
+        let isAgenda: Bool = if case .agenda = route { true } else { false }
+        let attributes = NativeFont.attributes(font: NativeFont.sectionHead, color: theme.color(.textPrimary), truncation: .byWordWrapping)
+        let measured = ceil((heading as NSString).boundingRect(with: CGSize(width: max(1, headingWidth - NativeSpace.xs * 2), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height) + NativeSpace.xs * 2
+        let headingHeight = isAgenda ? max(NativeSize.compactTarget, measured) : NativeSize.compactTarget
+        var headerItems = [NativeRenderItem(id: "overlay.heading", rect: CGRect(x: NativeSpace.lg, y: NativeSpace.sm, width: headingWidth, height: headingHeight), label: heading, kind: .text, value: isAgenda ? "wrapped-date" : nil),
                            NativeRenderItem(id: "overlay.close", rect: CGRect(x: surface.bounds.width - NativeSize.compactTarget - NativeSpace.sm, y: NativeSpace.sm, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: text("event.cancel"), kind: .button)]
-        var headerHeight = NativeSize.compactTarget + NativeSpace.sm * 2
+        var headerHeight = headingHeight + NativeSpace.sm * 2
         if let inlineMessage {
             let width = max(0, surface.bounds.width - NativeSpace.lg * 2)
             let attributes = NativeFont.attributes(font: NativeFont.body, color: theme.color(.danger), truncation: .byWordWrapping)
@@ -306,13 +311,20 @@ import AppKit
     }
     private var title: String {
         switch route {
-        case .newEvent: text("quick.title_" + quickKind)
-        case .event: text("event.title_edit")
-        case .settings: text("settings.title")
-        case .search: text("search.title")
-        case .monthPicker: String(pickerYear)
-        case .calendars: text("toolbar.calendars")
-        case .agenda: text("today.selected_day")
+        case .newEvent: return text("quick.title_" + quickKind)
+        case .event: return text("event.title_edit")
+        case .settings: return text("settings.title")
+        case .search: return text("search.title")
+        case .monthPicker: return String(pickerYear)
+        case .calendars: return text("toolbar.calendars")
+        case .agenda(let day, _):
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: state.snapshot.board.settings.language == .ko ? "ko_KR" : "en_US")
+            formatter.calendar = Calendar(identifier: .gregorian)
+            let zone = TimeZone(identifier: state.snapshot.clock.timeZone) ?? .current
+            formatter.timeZone = zone
+            formatter.setLocalizedDateFormatFromTemplate(day.year == state.snapshot.clock.today.year ? "EEEE MMMM d" : "y EEEE MMMM d")
+            return formatter.string(from: day.date(in: zone))
         }
     }
     private func row(_ id: String, label: String, kind: NativeRenderItem.Kind = .button, enabled: Bool = true, checked: Bool = false, fill: NativeColorToken? = nil, action: (@MainActor () -> Void)? = nil) {
@@ -397,10 +409,13 @@ import AppKit
     private func renderSearch() {
         let value = state.drafts[.search]?.textValue?.text ?? state.view.query
         field("search", key: "search.input_label", value: value)
-        searchResults = state.activity.loading ? [] : OverlaySearch.results(query: value, snapshot: state.snapshot)
+        let matches = state.activity.loading ? [] : OverlaySearch.results(query: value, snapshot: state.snapshot, limit: 13)
+        searchResults = Array(matches.prefix(12))
         searchIndex = min(max(0, searchIndex), max(0, searchResults.count - 1))
-        if state.activity.loading { paragraph("overlay.search.loading", text("notes.saving")) }
+        paragraph("overlay.search.scope", text("search.scope"))
+        if state.activity.loading { paragraph("overlay.search.loading", text("loading.label")) }
         else if searchResults.isEmpty { paragraph("overlay.search.empty", text("search.empty_results")) }
+        if matches.count > 12 { paragraph("overlay.search.limit", text("search.limit")) }
         for (index, result) in searchResults.enumerated() {
             row("overlay.result." + result.id, label: result.title, kind: .row, fill: index == searchIndex ? .selected : nil)
             paragraph("overlay.meta." + result.id, text(result.kindKey) + (result.day.map { " · " + $0.description } ?? ""))
@@ -431,8 +446,17 @@ import AppKit
             paragraph("overlay.calendar.meta." + calendar.id, text("accounts.in_view", ["0": String(count)]) + (calendar.writable ? "" : " · " + text("calendar.readonly")))
         }
         let isRefreshing = connecting || state.activity.refreshing
-        row("overlay.refresh", label: text(isRefreshing ? "toast.event_saving" : snapshot.calendarAuthorization == .authorized ? "accounts.refresh" : "accounts.connect"), enabled: !isRefreshing)
-        if snapshot.calendarAuthorization == .denied || snapshot.calendarAuthorization == .restricted { paragraph("overlay.permission", text("banner.denied")); row("overlay.privacy", label: text("banner.open_settings")) }
+        let authorization = snapshot.calendarAuthorization
+        let recovery = authorization == .denied || authorization == .restricted
+        if recovery {
+            paragraph("overlay.permission", text(authorization == .denied ? "banner.permission_denied" : "banner.permission_restricted"))
+            row("overlay.privacy", label: text("banner.open_system_settings"))
+        } else {
+            if authorization == .writeOnly { paragraph("overlay.permission", text("banner.permission_write_only")) }
+            if authorization == .unavailable { paragraph("overlay.permission", text("banner.permission_unavailable")) }
+            let action: String = switch authorization { case .authorized: "accounts.refresh"; case .writeOnly: "accounts.upgrade_access"; case .unavailable: "accounts.retry"; default: "accounts.connect" }
+            row("overlay.refresh", label: text(isRefreshing ? (connecting ? (authorization == .unavailable ? "accounts.retrying" : "accounts.connecting") : "accounts.refreshing") : action), enabled: !isRefreshing)
+        }
         row("overlay.accounts", label: text("accounts.manage"))
     }
     private func renderAgenda(_ day: DateOnly) {
@@ -442,7 +466,7 @@ import AppKit
             !state.snapshot.board.hiddenCalendarIDs.contains($0.item.calendarID) &&
                 DayMath.intersects(start: $0.item.start, end: $0.item.end, day: day.date(in: zone), calendar: calendar)
         }
-        if records.isEmpty { paragraph("overlay.agenda.empty", text("today.clear")) }
+        if records.isEmpty { paragraph("overlay.agenda.empty", text("today.empty")) }
         for record in records {
             row("overlay.agenda." + record.id, label: record.item.title, kind: .row)
             paragraph("overlay.agenda.meta." + record.id, record.item.calendarTitle + (record.item.writable ? "" : " · " + text("calendar.readonly")))
@@ -461,6 +485,7 @@ import AppKit
         label("network", "settings.network_section")
         row("overlay.settings.network", label: text("settings.network_master"), kind: .checkBox, checked: settings.networkEnabled)
         row("overlay.settings.rates", label: text("settings.rates_toggle"), kind: .checkBox, checked: settings.ratesEnabled)
+        if !settings.networkEnabled { paragraph("overlay.fx.preference", text("settings.rates_network_hint")) }
         if !settings.networkEnabled { paragraph("overlay.fx.state", text("status.network_disabled")) }
         else if !settings.ratesEnabled { paragraph("overlay.fx.state", text("status.fx_off")) }
         else if snapshot.external.rates.state == .stale { paragraph("overlay.fx.state", text("status.fx_stale")) }
@@ -491,7 +516,7 @@ import AppKit
             let panel = snapshot.board.layout.slots[slot.rawValue] ?? .today
             row("overlay.slot." + slot.rawValue, label: text("settings.slot_" + key, ["0": text(panelTitleKey(panel))]), kind: .checkBox, checked: !snapshot.board.layout.hiddenSlots.contains(slot.rawValue))
         }
-        paragraph("overlay.calendar.fixed", text("settings.calendar_fixed")); row("overlay.reset", label: text("settings.reset_layout"))
+        paragraph("overlay.calendar.fixed", text("settings.calendar_fixed")); row("overlay.reset", label: text("settings.reset_layout")); paragraph("overlay.reset.hint", text("settings.reset_layout_hint"))
         label("focus", "timer.title")
         row("overlay.focus.duration", label: text("timer.mode_focus", ["0": minutes(settings.focus.focusSeconds)]))
         row("overlay.break.duration", label: text("timer.mode_break", ["0": minutes(settings.focus.breakSeconds)]))

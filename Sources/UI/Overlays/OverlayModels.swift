@@ -9,7 +9,7 @@ struct OverlaySearchResult: Equatable {
     var target: OverlaySearchTarget
 }
 enum OverlaySearch {
-    static func results(query: String, snapshot: BoardSnapshot) -> [OverlaySearchResult] {
+    static func results(query: String, snapshot: BoardSnapshot, limit: Int = 12) -> [OverlaySearchResult] {
         let needle = query.precomposedStringWithCompatibilityMapping.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let zone = TimeZone(identifier: snapshot.clock.timeZone) ?? TimeZone(secondsFromGMT: 0)!
         func matches(_ values: [String]) -> Bool {
@@ -28,7 +28,7 @@ enum OverlaySearch {
             guard matches([project.title, project.targetDay?.description ?? ""]) else { return nil }
             return OverlaySearchResult(id: "project." + project.id.uuidString, title: project.title, kindKey: "search.project", day: project.targetDay, target: .project(project.id))
         }
-        return Array(output.prefix(12))
+        return Array(output.prefix(max(0, limit)))
     }
 }
 

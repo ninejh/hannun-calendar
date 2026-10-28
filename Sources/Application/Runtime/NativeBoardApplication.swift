@@ -254,7 +254,7 @@ struct NativeViewportStateFile: BoardPersistence {
             finish(entry, .success(result, snapshot: nil))
         } catch {
             let error = NativeRuntimeErrors.normalize(error)
-            if [.eventConflict, .eventNotFound, .calendarPermission].contains(error.code) || error.committed == .unknown {
+            if entry.operation != .connect && ([.eventConflict, .eventNotFound, .calendarPermission].contains(error.code) || error.committed == .unknown) {
                 await calendars.refresh(ranges: ranges, now: preferences.now, refreshSources: true)
             }
             finish(entry, .failure(error, snapshot: nil))
@@ -319,6 +319,7 @@ struct NativeViewportStateFile: BoardPersistence {
                 try await calendars.connect(ranges: ranges, now: preferences.now)
             }
             guard calendars.authorized else { throw AppFailure(code: .calendarPermission) }
+            if let error = calendars.error { throw AppFailure(code: AppFailureCode(rawValue: error) ?? .calendarUnavailable, retryable: true) }
             adoptCalendarRefresh(capture)
             return .connected
         case .edit(let edit, _):
@@ -536,6 +537,16 @@ struct NativeViewportStateFile: BoardPersistence {
                      resolvedWeekStart: value["resolvedWeekStart"] as? Int ?? 1, reduceMotion: value["reduceMotion"] as? Bool ?? false,
                      timeZone: preferences.timeZone.identifier, localeIdentifier: Locale.current.identifier)
     }
+    private static func calendarAuthorization(_ state: CalendarAccessState) -> CalendarAuthorization {
+        switch state {
+        case .notDetermined: return .notDetermined
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .writeOnly: return .writeOnly
+        case .fullAccess: return .authorized
+        case .unavailable: return .unavailable
+        }
+    }
     private static func login(_ preferences: NativePreferences) -> LoginStatus {
         LoginStatus(rawValue: preferences.login["status"] as? String ?? "notFound") ?? .notFound
     }
@@ -546,7 +557,7 @@ struct NativeViewportStateFile: BoardPersistence {
         let permission = panels.notifications.permission, board = store.state
         return BoardSnapshot(sessionID: sessionID, sequence: sequence, board: board,
                calendar: CalendarSnapshot(calendars: calendars.calendars, records: calendars.records, defaultCalendarID: calendars.defaultCalendarID),
-               calendarAuthorization: calendars.authorized ? .authorized : calendars.denied ? .denied : .notDetermined,
+               calendarAuthorization: Self.calendarAuthorization(calendars.accessState),
                clock: clock.snapshot, environment: environment(preferences, settings: board.settings),
                storage: !store.canSave ? .protected : configuration.mode == .demoMemory ? .demoMemory : .ready,
                storageWarning: store.lastError.map { NativeRuntimeErrors.normalize($0) }, login: login(preferences), focus: panels.focus.projection(),

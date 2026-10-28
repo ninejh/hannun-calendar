@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CryptoKit
+import OSLog
 @preconcurrency import EventKit
 
 #if HANNUN_TESTING
@@ -54,21 +55,56 @@ struct CalendarSnapshot: Sendable {
     var defaultCalendarID: String?
 }
 
+enum CalendarAccessState: Sendable {
+    case notDetermined, denied, restricted, writeOnly, fullAccess, unavailable
+    var authorized: Bool { self == .fullAccess }
+    var denied: Bool { self == .denied || self == .restricted || self == .writeOnly }
+}
+
+protocol CalendarWorkerProtocol: Sendable {
+    var accountAccessCount: Int { get async }
+    func authorization() async -> CalendarAccessState
+    func requestAccess() async throws -> Bool
+    func snapshot(ranges: [QueryRange], refreshSources: Bool) async throws -> CalendarSnapshot
+    func current(_ original: EventRecord, checkVersion: Bool) async throws -> EventRecord
+    func save(_ draft: EventDraft, original: EventRecord?) async throws -> EventRecord
+    func removeCreated(_ original: EventRecord) async throws
+}
+
 /// EKEvent, EKCalendar and the store never leave this actor.
-actor CalendarWorker {
+actor CalendarWorker: CalendarWorkerProtocol {
     private let store = EKEventStore()
     private var lastSourceRefresh = Date.distantPast
     private(set) var accountAccessCount = 0
-    func authorization() -> (Bool, Bool) {
-        let status = EKEventStore.authorizationStatus(for: .event)
-        return (status == .fullAccess, status == .denied || status == .restricted || status == .writeOnly)
+    func authorization() -> CalendarAccessState {
+        switch EKEventStore.authorizationStatus(for: .event) {
+        case .notDetermined: return .notDetermined
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .writeOnly: return .writeOnly
+        case .fullAccess: return .fullAccess
+        @unknown default: return .unavailable
+        }
     }
     func requestAccess() async throws -> Bool {
-        do { return try await store.requestFullAccessToEvents() }
-        catch { throw NativeFailure(code: "CALENDAR_UNAVAILABLE", retryable: true) }
+        let logger = Logger(subsystem: "io.github.ninejh.hannuncalendar", category: "calendar-access")
+        let entryState = String(describing: authorization())
+        logger.info("Calendar access request started: state=\(entryState, privacy: .public)")
+        do {
+            let granted = try await store.requestFullAccessToEvents()
+            let resultState = String(describing: authorization())
+            logger.info("Calendar access request completed: granted=\(granted, privacy: .public) state=\(resultState, privacy: .public)")
+            return granted
+        } catch {
+            let nsError = error as NSError
+            let allowedDomains = ["EKErrorDomain", NSCocoaErrorDomain, NSOSStatusErrorDomain]
+            let domain = allowedDomains.contains(nsError.domain) ? nsError.domain : "other"
+            logger.error("Calendar access request failed: domain=\(domain, privacy: .public) code=\(nsError.code, privacy: .public)")
+            throw NativeFailure(code: "CALENDAR_UNAVAILABLE", retryable: true)
+        }
     }
     func snapshot(ranges: [QueryRange], refreshSources: Bool) throws -> CalendarSnapshot {
-        guard authorization().0 else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
+        guard authorization().authorized else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
         accountAccessCount += 1
         if refreshSources && Date().timeIntervalSince(lastSourceRefresh) >= 30 {
             lastSourceRefresh = Date(); store.refreshSourcesIfNecessary()
@@ -97,7 +133,7 @@ actor CalendarWorker {
         }
     }
     func current(_ original: EventRecord, checkVersion: Bool) throws -> EventRecord {
-        guard authorization().0 else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
+        guard authorization().authorized else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
         store.refreshSourcesIfNecessary()
         guard let event = occurrence(original, requireStart: checkVersion) else { throw NativeFailure(code: "EVENT_NOT_FOUND") }
         let current = Self.record(event)
@@ -105,7 +141,7 @@ actor CalendarWorker {
         return current
     }
     func save(_ draft: EventDraft, original: EventRecord?) throws -> EventRecord {
-        guard authorization().0 else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
+        guard authorization().authorized else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
         store.refreshSourcesIfNecessary()
         let event: EKEvent
         if let original {
@@ -131,7 +167,7 @@ actor CalendarWorker {
         return occurrence(committed).map(Self.record) ?? committed
     }
     func removeCreated(_ original: EventRecord) throws {
-        guard authorization().0 else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
+        guard authorization().authorized else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
         store.refreshSourcesIfNecessary()
         guard let event = occurrence(original) else { throw NativeFailure(code: "EVENT_NOT_FOUND") }
         guard Self.record(event).version == original.version else { throw NativeFailure(code: "EVENT_CONFLICT") }
@@ -161,13 +197,14 @@ final class CalendarService: ObservableObject {
     @Published private(set) var calendars: [CalendarInfo] = []
     @Published private(set) var records: [EventRecord] = []
     var events: [CalendarItem] { records.map(\.item) }
+    @Published private(set) var accessState: CalendarAccessState = .notDetermined
     @Published private(set) var authorized = false
     @Published private(set) var denied = false
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     @Published private(set) var refreshedAt: Date?
     @Published private(set) var defaultCalendarID: String?
-    private let worker: CalendarWorker?
+    private var worker: (any CalendarWorkerProtocol)?
     private var generation = 0
     private var retained: [String: EventRecord] = [:]
     private(set) var accountAccessCount = 0
@@ -186,22 +223,34 @@ final class CalendarService: ObservableObject {
         worker = demo ? nil : CalendarWorker()
 #endif
         if demo && !emptyPreview {
-            authorized = true; calendars = DemoData.calendars
+            accessState = .fullAccess; authorized = true; calendars = DemoData.calendars
             records = DemoData.events.map { EventRecord(item: $0) }
             defaultCalendarID = calendars.first?.id; refreshedAt = Date()
         }
     }
+#if HANNUN_TESTING
+    convenience init(testWorker: any CalendarWorkerProtocol) {
+        self.init(demo: true, emptyPreview: true)
+        worker = testWorker
+    }
+#endif
+    private enum RefreshOutcome {
+        case adopted, permission, failed(String), superseded
+    }
     func refresh(ranges: [QueryRange], now: Date, refreshSources: Bool = false) async {
+        _ = await refreshResult(ranges: ranges, now: now, refreshSources: refreshSources)
+    }
+    private func refreshResult(ranges: [QueryRange], now: Date, refreshSources: Bool = false) async -> RefreshOutcome {
         generation += 1; let token = generation
         loading = true
-        guard let worker else { refreshedAt = now; loading = false; return }
+        guard let worker else { refreshedAt = now; loading = false; return .adopted }
         let access = await worker.authorization()
-        guard token == generation else { return }
-        authorized = access.0; denied = access.1
-        guard authorized else { records = []; retained = [:]; calendars = []; defaultCalendarID = nil; error = nil; loading = false; return }
+        guard token == generation else { return .superseded }
+        accessState = access; authorized = access.authorized; denied = access.denied
+        guard authorized else { records = []; retained = [:]; calendars = []; defaultCalendarID = nil; error = nil; loading = false; return .permission }
         do {
             let snapshot = try await worker.snapshot(ranges: ranges, refreshSources: refreshSources)
-            guard token == generation else { return }
+            guard token == generation else { return .superseded }
             calendars = snapshot.calendars; records = snapshot.records
             let loadedIDs = Set(records.map { $0.id })
             let sourceIDs = Set(calendars.map(\.id))
@@ -210,12 +259,16 @@ final class CalendarService: ObservableObject {
             }
             records += retained.values.filter { !loadedIDs.contains($0.id) }
             error = nil; refreshedAt = now; defaultCalendarID = snapshot.defaultCalendarID
-            accountAccessCount = await worker.accountAccessCount
+            let count = await worker.accountAccessCount
+            guard token == generation else { return .superseded }
+            accountAccessCount = count; loading = false
+            return .adopted
         } catch {
-            guard token == generation else { return }
-            self.error = (error as? NativeFailure)?.code ?? "CALENDAR_UNAVAILABLE"
+            guard token == generation else { return .superseded }
+            let code = (error as? NativeFailure)?.code ?? "CALENDAR_UNAVAILABLE"
+            self.error = code; loading = false
+            return .failed(code)
         }
-        if token == generation { loading = false }
     }
 #if HANNUN_TESTING
     @discardableResult func stageSyntheticCalendarEvents(_ records: [EventRecord]) -> Bool {
@@ -239,8 +292,28 @@ final class CalendarService: ObservableObject {
 #endif
     func connect(ranges: [QueryRange], now: Date) async throws {
         guard let worker else { return }
-        _ = try await worker.requestAccess()
-        await refresh(ranges: ranges, now: now)
+        let granted: Bool
+        do { granted = try await worker.requestAccess() }
+        catch {
+            let access = await worker.authorization()
+            accessState = access; authorized = access.authorized; denied = access.denied
+            if !authorized { records = []; retained = [:]; calendars = []; defaultCalendarID = nil }
+            if access.denied { throw NativeFailure(code: "CALENDAR_PERMISSION") }
+            throw NativeFailure(code: "CALENDAR_UNAVAILABLE", retryable: true)
+        }
+        guard granted else {
+            let access = await worker.authorization()
+            generation += 1; loading = false
+            accessState = access; authorized = access.authorized; denied = access.denied
+            records = []; retained = [:]; calendars = []; defaultCalendarID = nil
+            throw NativeFailure(code: "CALENDAR_PERMISSION")
+        }
+        switch await refreshResult(ranges: ranges, now: now) {
+        case .adopted: return
+        case .permission: throw NativeFailure(code: "CALENDAR_PERMISSION")
+        case .failed(let code): throw NativeFailure(code: code, retryable: true)
+        case .superseded: throw NativeFailure(code: "CALENDAR_UNAVAILABLE", retryable: true)
+        }
     }
     func find(_ id: String) -> EventRecord? { records.first { $0.id == id } ?? retained[id] }
     func current(_ original: EventRecord, checkVersion: Bool) async throws -> EventRecord {
@@ -333,6 +406,7 @@ final class CalendarService: ObservableObject {
         precondition(demo)
         self.calendars = authorization == "authorized" ? calendars : []
         self.records = authorization == "authorized" ? records : []; retained = [:]
+        accessState = authorization == "authorized" ? .fullAccess : authorization == "denied" ? .denied : .notDetermined
         authorized = authorization == "authorized"; denied = authorization == "denied"
         defaultCalendarID = restorePersistedDefault ? persistedDefault : self.calendars.first(where: \.writable)?.id
     }

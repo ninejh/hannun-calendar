@@ -176,7 +176,7 @@ private enum DeadlineStepLayout {
             append(NativeRenderItem(id: prefix + ".date", rect: CGRect(x: rect.minX, y: rect.minY + NativeSize.compactTarget, width: titleWidth, height: NativeSize.compactTarget), label: date + (origin.isEmpty ? "" : " · " + origin), kind: .text, color: .textSecondary), .secondary)
         }
         append(NativeRenderItem(id: prefix + ".badge", rect: CGRect(x: rect.maxX - badgeWidth - menuWidth, y: rect.minY, width: badgeWidth, height: rect.height), label: badgeText, kind: .badge, color: row.day < context.presentation.state.snapshot.clock.today ? .danger : .textPrimary), .countdown)
-        if menuWidth > 0 { append(NativeRenderItem(id: prefix + ".menu", rect: CGRect(x: rect.maxX - menuWidth, y: rect.midY - NativeSize.compactTarget / 2, width: menuWidth, height: NativeSize.compactTarget), label: context.text("deadlines.rename") + " · " + row.title, kind: .button), .plain); content.displayLabels[prefix + ".menu"] = "···" }
+        if menuWidth > 0 { append(NativeRenderItem(id: prefix + ".menu", rect: CGRect(x: rect.maxX - menuWidth, y: rect.midY - NativeSize.compactTarget / 2, width: menuWidth, height: NativeSize.compactTarget), label: context.text("a11y.item_options", values: ["0": row.title]), kind: .button), .plain); content.displayLabels[prefix + ".menu"] = "···" }
     }
     private func renderDeck(groups: (active: [DeadlineRow], past: [DeadlineRow]), viewport: CGSize, metrics: NativePanelStepMetrics) {
         let cardWidth = metrics.minimumCardWidth!, gap = metrics.cardGap
@@ -195,7 +195,7 @@ private enum DeadlineStepLayout {
             append(NativeRenderItem(id: base + ".badge", rect: CGRect(x: x, y: top + NativeSize.compactTarget, width: cardWidth, height: heightStep == .small ? NativeSize.compactTarget : height - NativeSize.compactTarget), label: DeadlineRows.badge(day: row.day, today: context.presentation.state.snapshot.clock.today, context: context), kind: .badge, color: row.day < context.presentation.state.snapshot.clock.today ? .danger : .textPrimary), .countdown)
             if heightStep == .small { append(NativeRenderItem(id: base + ".date", rect: CGRect(x: x, y: top + NativeSize.compactTarget * 2, width: cardWidth, height: height - NativeSize.compactTarget * 2), label: date, kind: .text, color: .textSecondary), .metadata) }
             if personal {
-                append(NativeRenderItem(id: base + ".menu", rect: CGRect(x: rect.maxX - NativeSize.compactTarget, y: top, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: context.text("deadlines.rename") + " · " + row.title, kind: .button), .plain)
+                append(NativeRenderItem(id: base + ".menu", rect: CGRect(x: rect.maxX - NativeSize.compactTarget, y: top, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: context.text("a11y.item_options", values: ["0": row.title]), kind: .button), .plain)
                 content.displayLabels[base + ".menu"] = "···"
             }
             index += 1

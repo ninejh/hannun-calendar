@@ -252,8 +252,9 @@ import Foundation
         let handle = application.requestUndo(source: undo.source, context: context); handles[handle.id] = handle
         rebuild(); watch(handle); publish([.board, .pending, .toast]); return handle
     }
-    func reconcile(_ id: UUID) {
-        switch application.result(of: id, sessionID: base.sessionID) {
+    @discardableResult func reconcile(_ id: UUID) -> Result<OperationStatus, AppFailure>? {
+        let result = application.result(of: id, sessionID: base.sessionID)
+        switch result {
         case .success(.completed(let receipt)): settle(id, receipt: receipt)
         case .success(.notFound):
             // Only proven non-admission is safe to offer as a new explicit retry.
@@ -264,6 +265,7 @@ import Foundation
         case .failure(let error): state.lastError = error; publish([.error])
         case .success(.pending): break
         }
+        return result
     }
     private func settle(_ id: UUID, receipt: CommandReceipt) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }

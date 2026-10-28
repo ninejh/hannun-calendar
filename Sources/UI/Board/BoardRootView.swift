@@ -14,6 +14,7 @@ import AppKit
     private let overlayFactory: OverlayFactory
     private var controllers: [PanelID: any PanelController] = [:]
     private var menus: [SlotID: NativeMenu] = [:]
+    private var layoutMenus: [NativeMenu] = []
     private var activeOverlay: (any OverlayController)?
     private var activeRoute: BoardRoute?
     private var overlayState: OverlayRoute?
@@ -55,6 +56,7 @@ import AppKit
         feedback.onAction = { [weak presentation] id in if id == "action.undo" { presentation?.send(.undo) } }
         feedback.onShortcut = { [weak self] in self?.handleShortcut($0) ?? false }
         calendarView.boardShortcut = { [weak self] in self?.handleShortcut($0) ?? false }
+        calendarView.contextMenu = { [weak self] id in id == "action.layout" ? self?.layoutMenu() : nil }
         workspace.onShortcut = { [weak self] in self?.handleShortcut($0) ?? false }
         workspace.onAdjust = { [weak self] id, amount in if let split = BoardWorkspaceView.split(id) { self?.adjust(split, amount: amount) } }
         workspace.beginSplit = { [weak self] split, position in self?.begin(split, position: position) }
@@ -203,6 +205,38 @@ import AppKit
         }
         wrapper.menu.title = context.text("slot_menu.title"); menus[slot] = wrapper; return wrapper.menu
     }
+    private func layoutMenu() -> NSMenu {
+        for menu in layoutMenus { menu.dispose() }; layoutMenus.removeAll()
+        let menu = NSMenu(); menu.autoenablesItems = false
+        let layout = context.presentation.state.snapshot.board.layout
+        for split in [LayoutSplit.column, .main, .rail, .railBottom] {
+            let candidate = geometry.candidates[split]?.first(where: { $0.step == geometry.effectiveSteps[split] })
+            let suffix: String = switch split { case .column: "column"; case .main: "main"; case .rail: "upper"; case .railBottom: "lower" }
+            func title(_ slot: SlotID?) -> String { slot.flatMap { layout.slots[$0.rawValue] }.map { context.text(Self.panelKey($0)) } ?? "" }
+            let base = context.text("layout.menu." + suffix)
+            let name = candidate?.primarySlot.map { base + " — " + title($0) } ?? base
+            let parent = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+            parent.identifier = NSUserInterfaceItemIdentifier("layout.\(split.rawValue)")
+            guard let candidate else { parent.isEnabled = false; menu.addItem(parent); continue }
+            let entries = PanelSizeStep.allCases.map { step in
+                let key: String = switch step { case .tiny: "tiny"; case .small: "small"; case .regular: "regular"; case .large: "large" }
+                return NativeMenuEntry(id: "layout.\(split.rawValue).\(step.rawValue)", title: context.text("layout.step." + key), checked: geometry.effectiveSteps[split] == step)
+            }
+            let wrapper = NativeMenu(items: entries) { [weak self] id in
+                guard let raw = id.split(separator: ".").last, let number = Int(raw), let step = PanelSizeStep(rawValue: number) else { return }
+                self?.setStep(split, step: step)
+            }
+            let explanation = NSMenuItem(title: context.text("layout.explain." + suffix, values: ["neighbor": title(candidate.neighborSlot)]), action: nil, keyEquivalent: "")
+            explanation.isEnabled = false; wrapper.menu.insertItem(.separator(), at: 0); wrapper.menu.insertItem(explanation, at: 0)
+            parent.submenu = wrapper.menu; menu.addItem(parent); layoutMenus.append(wrapper)
+        }
+        return menu
+    }
+    private func setStep(_ split: LayoutSplit, step: PanelSizeStep) {
+        workspace.cancelSplit()
+        guard geometry.dividers[split] != nil, geometry.effectiveSteps[split] != step else { return }
+        context.presentation.send(.edit(.layout(.setStep(split, step, viewport: LayoutViewport(width: bounds.width, height: bounds.height))), undoable: false))
+    }
     private func begin(_ split: LayoutSplit, position: CGFloat) {
         guard let rect = geometry.dividers[split], let candidates = geometry.candidates[split] else { return }
         let viewport = LayoutViewport(width: bounds.width, height: bounds.height)
@@ -225,7 +259,7 @@ import AppKit
         guard geometry.dividers[split] != nil else { return }
         let previous = geometry.effectiveSteps[split]
         guard let step = PanelSizeStep(rawValue: min(4, max(1, previous.rawValue + amount))), step != previous else { return }
-        context.presentation.send(.edit(.layout(.setStep(split, step, viewport: LayoutViewport(width: bounds.width, height: bounds.height))), undoable: false))
+        setStep(split, step: step)
     }
     func handleShortcut(_ event: NSEvent) -> Bool {
         if event.keyCode == 53 {
@@ -417,6 +451,7 @@ import AppKit
         guard !lifetime.isDisposed else { return }
         workspace.cancelSplit(); context.presentation.send(.cancelStepPreview)
         lifetime.dispose(); drag = nil; routingProxy.target = nil; context.kit.panelMenus.target = nil
+        for menu in layoutMenus { menu.dispose() }; layoutMenus.removeAll()
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }; mouseMonitor = nil
         for observation in inputObservations { NotificationCenter.default.removeObserver(observation) }; inputObservations = []
         deferredOverlayAction = nil

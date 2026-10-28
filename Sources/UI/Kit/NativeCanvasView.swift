@@ -13,7 +13,7 @@ struct NativeSliderMetadata: Equatable {
     var value: Double
 }
 struct NativeRenderItem: Equatable {
-    enum Kind: Equatable { case button, checkBox, slider, row, group, text, chip, badge, image }
+    enum Kind: Equatable { case button, menuButton, checkBox, slider, row, group, text, chip, badge, image }
     var id: String
     /// Shared interaction/AX/drawing enclosure; content is inset inside this rect.
     var rect: CGRect
@@ -32,11 +32,11 @@ struct NativeRenderItem: Equatable {
     var splitter: NativeSplitterMetadata? = nil
     var focusID: FocusID { FocusID(panelHeader?.identifier ?? id) }
     var hitRect: CGRect { panelHeader?.titleRect ?? interactionRect ?? NativeGeometry.target(rect, minimum: minimumTarget) }
-    var isInteractive: Bool { panelHeader != nil || [.button, .checkBox, .slider, .row, .chip].contains(kind) }
+    var isInteractive: Bool { panelHeader != nil || [.button, .menuButton, .checkBox, .slider, .row, .chip].contains(kind) }
     var role: NSAccessibility.Role {
         if panelHeader != nil { return .group }
         if splitter != nil { return .splitter }
-        return switch kind { case .button, .chip: .button; case .checkBox: .checkBox; case .slider: .slider; case .row: .row; case .group: .group; case .text, .badge: .staticText; case .image: .image }
+        return switch kind { case .button, .chip: .button; case .menuButton: .popUpButton; case .checkBox: .checkBox; case .slider: .slider; case .row: .row; case .group: .group; case .text, .badge: .staticText; case .image: .image }
     }
 }
 /// AppKit exposes AX callbacks as nonisolated. Immutable Sendable routing closures enter

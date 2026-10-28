@@ -8,9 +8,9 @@ Mac에서 달력과 프로젝트, 메모, 할 일, 정기 결제, 세계 시계,
 
 ## 초기 베타 다운로드
 
-릴리스 **v1.0.0-beta.1**: [Hannun-Calendar-arm64.dmg](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.1/Hannun-Calendar-arm64.dmg) · [Hannun-Calendar-arm64.zip](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.1/Hannun-Calendar-arm64.zip). 설치 전에 같은 릴리스의 `SHA256SUMS`로 파일을 확인하세요.
+릴리스 **v1.0.0-beta.2**: [Hannun-Calendar-arm64.dmg](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.2/Hannun-Calendar-arm64.dmg) · [Hannun-Calendar-arm64.zip](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.2/Hannun-Calendar-arm64.zip). 설치 전에 같은 릴리스의 `SHA256SUMS`로 파일을 확인하세요.
 
-보고된 캘린더 연결 문제는 조사 중이며 원인은 아직 확정되지 않았습니다. 초기 베타로서 모든 macOS 통합 동작이나 전체 수용 테스트 통과를 주장하지 않습니다.
+이번 베타에는 캘린더 연결 처리와 보드 컨트롤 변경이 포함됩니다. 보고된 캘린더 권한 창 미표시 현상은 실제 환경에서 아직 검증되지 않았고 원인도 확정되지 않았습니다. 모든 계정에서 캘린더 연결이 된다고 주장하지 않습니다. 초기 베타로서 모든 macOS 통합 동작이나 전체 수용 테스트 통과를 주장하지 않습니다.
 
 ## 요구 사항과 빌드
 

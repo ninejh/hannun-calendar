@@ -71,6 +71,7 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
     private(set) var inlineError: AppFailure?
     private var failedID: UUID?
     private var schedules: [UUID: Int] = [:]
+    private var displayedSchedules: [UUID: (offset: Int, limit: Int)] = [:]
     // Coalesce pointer samples while one durable progress write is accepted.
     // These transient values never replace the authoritative board or an admitted operation.
     private var progressDesired: [UUID: Int] = [:]
@@ -250,7 +251,7 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         var items: [NativeRenderItem] = []; content.styles = [:]; content.displayLabels = [:]; content.tints = [:]; content.schedules = [:]
         content.cardViewports = [:]; content.itemViewports = [:]; logicalCardItems = [:]; cardDocumentHeights = [:]
         func append(_ item: NativeRenderItem, _ style: ManagementCanvas.Style? = nil) { items.append(item); content.styles[item.id] = style }
-        if count == 0 { append(NativeRenderItem(id: "projects.empty", rect: CGRect(x: inset, y: inset, width: max(0, viewport.width - inset * 2), height: NativeSize.compactTarget * 2), label: context.text(state.activity.loading ? "loading.label" : "projects.empty"), kind: .text, color: .textSecondary), .message) }
+        if count == 0 { append(NativeRenderItem(id: "projects.empty", rect: CGRect(x: inset, y: inset, width: max(0, viewport.width - inset * 2), height: NativeSize.compactTarget * 2), label: context.text(state.activity.loading ? "loading.label" : snapshot.board.projects.isEmpty ? "projects.empty" : "projects.hidden_done"), kind: .text, color: .textSecondary), .message) }
         for (index, project) in visibleProjects.enumerated() {
             let rect = cardRects[index], base = "project." + project.id.uuidString.lowercased(), x = rect.minX + NativeSpace.sm, inner = max(0, rect.width - NativeSpace.lg)
             if condensed {
@@ -265,7 +266,9 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             let scheduleRect = CGRect(x: x, y: rect.minY + NativeSize.compactTarget * 2 + NativeSpace.xs, width: inner, height: max(NativeSize.compactTarget, rect.height - NativeSize.compactTarget * 5 - NativeSpace.sm))
             content.schedules[base] = scheduleRect
             let linked = events(project), rows = max(1, Int(scheduleRect.height / NativeSize.compactTarget)), capacity = max(1, rows - (linked.count > rows ? 1 : 0))
-            let offset = min(max(0, schedules[project.id] ?? 0), max(0, linked.count - capacity))
+            let limit = max(0, linked.count - capacity)
+            let offset = min(max(0, schedules[project.id] ?? 0), limit)
+            displayedSchedules[project.id] = (offset, limit)
             if linked.isEmpty { append(NativeRenderItem(id: base + ".events.empty", rect: scheduleRect, label: context.text("projects.no_events"), kind: .text, color: .textQuiet), .secondary) }
             for (i, event) in linked.dropFirst(offset).prefix(capacity).enumerated() {
                 let day = DateOnly(date: event.item.start, timeZone: TimeZone(identifier: snapshot.environment.timeZone) ?? .current) ?? snapshot.clock.today
@@ -276,8 +279,8 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             if linked.count > rows {
                 content.displayLabels[base + ".events.previous"] = "↑"; content.displayLabels[base + ".events.next"] = "↓"
                 let y = scheduleRect.minY + CGFloat(capacity) * NativeSize.compactTarget
-                append(NativeRenderItem(id: base + ".events.previous", rect: CGRect(x: x, y: y, width: inner / 2, height: NativeSize.compactTarget), label: context.text("a11y.previous_projects"), kind: .button, enabled: offset > 0), .plain)
-                append(NativeRenderItem(id: base + ".events.next", rect: CGRect(x: x + inner / 2, y: y, width: inner / 2, height: NativeSize.compactTarget), label: context.text("a11y.next_projects"), kind: .button, enabled: offset + capacity < linked.count), .plain)
+                append(NativeRenderItem(id: base + ".events.previous", rect: CGRect(x: x, y: y, width: inner / 2, height: NativeSize.compactTarget), label: context.text("a11y.previous_project_schedule", values: ["0": project.title]), kind: .button, enabled: offset > 0), .plain)
+                append(NativeRenderItem(id: base + ".events.next", rect: CGRect(x: x + inner / 2, y: y, width: inner / 2, height: NativeSize.compactTarget), label: context.text("a11y.next_project_schedule", values: ["0": project.title]), kind: .button, enabled: offset + capacity < linked.count), .plain)
             }
             let progressY = rect.maxY - NativeSize.compactTarget * 2 - NativeSpace.md
             append(NativeRenderItem(id: base + ".progress.label", rect: CGRect(x: x, y: progressY, width: NativeSize.compactTarget * 2.5, height: NativeSize.compactTarget), label: context.text("projects.progress"), kind: .text), .secondary)
@@ -287,7 +290,7 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             let bottom = rect.maxY - NativeSize.compactTarget - NativeSpace.sm
             append(NativeRenderItem(id: base + ".target", rect: CGRect(x: x, y: bottom, width: max(0, inner - NativeSize.compactTarget * 4.5), height: NativeSize.compactTarget), label: context.text("projects.target", values: ["0": project.targetDay.map { ManagementCopy.date($0, context: context) } ?? context.text("projects.set_date")]), kind: .button), .secondary)
             append(NativeRenderItem(id: base + ".add", rect: CGRect(x: rect.maxX - NativeSize.compactTarget * 4.5 - NativeSpace.sm, y: bottom, width: NativeSize.compactTarget * 3.5, height: NativeSize.compactTarget), label: context.text("projects.link_event"), kind: .button), .secondary)
-            append(NativeRenderItem(id: base + ".menu", rect: CGRect(x: rect.maxX - NativeSize.compactTarget - NativeSpace.sm, y: bottom, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: context.text("projects.rename") + " · " + project.title, kind: .button), .plain); content.displayLabels[base + ".menu"] = "···"
+            append(NativeRenderItem(id: base + ".menu", rect: CGRect(x: rect.maxX - NativeSize.compactTarget - NativeSpace.sm, y: bottom, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: context.text("a11y.item_options", values: ["0": project.title]), kind: .button), .plain); content.displayLabels[base + ".menu"] = "···"
         }
 
         if let error = inlineError { append(NativeRenderItem(id: "projects.error", rect: CGRect(x: inset, y: 0, width: viewport.width, height: NativeSize.compactTarget), label: context.text(error.messageKey), kind: .button, color: .danger)) }
@@ -305,11 +308,11 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         let offset = min(max(0, cardOffsets[base] ?? 0), max(0, documentHeight - rect.height))
         cardOffsets[base] = offset; content.cardViewports[base] = rect
         append(NativeRenderItem(id: base + ".card", rect: rect, label: project.title, kind: .group), .card)
-        func add(_ suffix: String, x itemX: CGFloat = 0, y: CGFloat, width: CGFloat, label: String, kind: NativeRenderItem.Kind = .button, style: ManagementCanvas.Style = .secondary, value: String? = nil, slider: NativeSliderMetadata? = nil, fill: NativeColorToken? = nil) {
+        func add(_ suffix: String, x itemX: CGFloat = 0, y: CGFloat, width: CGFloat, label: String, kind: NativeRenderItem.Kind = .button, style: ManagementCanvas.Style = .secondary, value: String? = nil, slider: NativeSliderMetadata? = nil, fill: NativeColorToken? = nil, enabled: Bool = true) {
             let logical = CGRect(x: x + itemX, y: rect.minY + y, width: max(0, width), height: row)
             logicalCardItems[base + suffix] = logical
             let painted = logical.offsetBy(dx: 0, dy: -offset)
-            var item = NativeRenderItem(id: base + suffix, rect: painted, label: label, kind: kind, value: value, fill: fill, slider: slider)
+            var item = NativeRenderItem(id: base + suffix, rect: painted, label: label, kind: kind, value: value, enabled: enabled, fill: fill, slider: slider)
             let hit = painted.intersection(rect); item.interactionRect = hit.isNull ? .zero : hit
             content.itemViewports[item.id] = rect; append(item, style)
         }
@@ -327,9 +330,11 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             add(".badge", x: inner - badgeWidth, y: row, width: badgeWidth, label: DeadlineRows.badge(day: target, today: snapshot.clock.today, context: context), kind: .badge)
         }
         add(".add", y: controlsY, width: inner - row, label: context.text("projects.link_event"))
-        add(".menu", x: inner - row, y: controlsY, width: row, label: context.text("projects.rename") + " · " + project.title, style: .plain)
+        add(".menu", x: inner - row, y: controlsY, width: row, label: context.text("a11y.item_options", values: ["0": project.title]), style: .plain)
         content.displayLabels[base + ".menu"] = "···"
-        let scheduleOffset = min(max(0, schedules[project.id] ?? 0), max(0, linked.count - 1))
+        let limit = max(0, linked.count - 1)
+        let scheduleOffset = min(max(0, schedules[project.id] ?? 0), limit)
+        displayedSchedules[project.id] = (scheduleOffset, limit)
         if let event = linked.dropFirst(scheduleOffset).first {
             let zone = TimeZone(identifier: snapshot.environment.timeZone) ?? .current
             let day = DateOnly(date: event.item.start, timeZone: zone) ?? snapshot.clock.today
@@ -337,8 +342,8 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             add(".event." + event.id, y: scheduleY, width: inner, label: ManagementCopy.date(day, context: context) + "  " + time + "  " + event.item.title)
         } else { add(".events.empty", y: scheduleY, width: inner, label: context.text("projects.no_events"), kind: .text) }
         if linked.count > 1 {
-            add(".events.previous", y: scheduleY + row, width: inner / 2, label: context.text("a11y.previous_projects"), style: .plain)
-            add(".events.next", x: inner / 2, y: scheduleY + row, width: inner / 2, label: context.text("a11y.next_projects"), style: .plain)
+            add(".events.previous", y: scheduleY + row, width: inner / 2, label: context.text("a11y.previous_project_schedule", values: ["0": project.title]), style: .plain, enabled: scheduleOffset > 0)
+            add(".events.next", x: inner / 2, y: scheduleY + row, width: inner / 2, label: context.text("a11y.next_project_schedule", values: ["0": project.title]), style: .plain, enabled: scheduleOffset + 1 < linked.count)
             content.displayLabels[base + ".events.previous"] = "↑"; content.displayLabels[base + ".events.next"] = "↓"
         }
     }
@@ -413,8 +418,9 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
     }
     private func moveSchedule(_ prefix: String, delta: Int) {
         guard let project = visibleProjects.first(where: { prefix == "project." + $0.id.uuidString.lowercased() }) else { return }
-        let next = max(0, min(events(project).count - 1, (schedules[project.id] ?? 0) + delta))
-        guard next != schedules[project.id] else { return }; schedules[project.id] = next; render()
+        guard let displayed = displayedSchedules[project.id] else { return }
+        let next = max(0, min(displayed.limit, displayed.offset + delta))
+        guard next != displayed.offset else { return }; schedules[project.id] = next; render()
     }
     func menu(for id: UUID) -> NSMenu {
         retainedMenu?.dispose()

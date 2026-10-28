@@ -117,46 +117,65 @@ struct AgendaProjection: Equatable {
         let state = context.presentation.state, width = surface.bounds.width, height = surface.bounds.height
         let metrics = NativePanelStepMetrics(panel: panelID, shape: variant == .wide ? .wide : .rail, step: heightStep)
         let compact = heightStep == .tiny || heightStep == .small
-        // The approved Today header/padding/bottom differ from the generic rail defaults.
-        let header = compact ? metrics.headerHeight : NativeSize.toolbarHeight + NativeSpace.lg
+        let baseHeader = compact ? metrics.headerHeight : NativeSize.toolbarHeight + NativeSpace.lg
         let inset = compact ? metrics.horizontalPadding : NativeSpace.xl
         let contentWidth = max(0, width - inset * 2)
         let wide = variant == .wide
         let summaryWidth = wide ? contentWidth / 3 : contentWidth
         let nextHeight = heightStep == .tiny ? NativeSpace.xl : heightStep == .small ? NativeSize.compactTarget + NativeSpace.xxs : NativeSize.compactTarget + NativeSpace.sm
-        let controlHeight = min(NativeSize.compactTarget, header)
-        let headerTop = heightStep == .tiny ? 0 : NativeSpace.xs
         let selected = projection.day != state.snapshot.clock.today
-        let backLabel = context.text("today.back_to_today_compact")
-        let backWidth = max(NativeSize.compactTarget, ceil((backLabel as NSString).size(withAttributes: [.font: NativeFont.primary]).width) + NativeSpace.sm * 2)
-        let addWidth = readOnly ? 0 : NativeSize.compactTarget
-        let titleWidth = max(0, contentWidth - addWidth - (selected && !readOnly ? backWidth + NativeSpace.sm : 0) - NativeSpace.sm)
-        let titleRect = CGRect(x: inset, y: headerTop, width: titleWidth, height: controlHeight)
-        var items = [NativeRenderItem(id: prefix + "title", rect: titleRect, label: context.text(selected ? "today.selected_day" : "today.title"), kind: .text)]
+        let useSelectedHeader = selected && !readOnly
+        let backLabel = context.text("today.back_to_today")
+        let backWidth = max(44, ceil((backLabel as NSString).size(withAttributes: [.font: NativeFont.primary]).width) + NativeSpace.sm * 2)
+        let controlHeight: CGFloat = useSelectedHeader ? 44 : min(NativeSize.compactTarget, baseHeader)
+        let addWidth: CGFloat = readOnly ? 0 : controlHeight
+        let headerTop = heightStep == .tiny ? 0 : NativeSpace.xs
+        let titleWidth = max(0, useSelectedHeader ? contentWidth : contentWidth - addWidth - NativeSpace.sm)
+        let dateFormatter = DateFormatter(); dateFormatter.locale = dayFormatter.locale; dateFormatter.calendar = dayFormatter.calendar; dateFormatter.timeZone = zone
+        dateFormatter.setLocalizedDateFormatFromTemplate(projection.day.year == state.snapshot.clock.today.year ? "EEEE MMMM d" : "y EEEE MMMM d")
+        let heading = selected ? dateFormatter.string(from: projection.day.date(in: zone)) : context.text("today.title")
+        let attrs = NativeFont.attributes(font: NativeFont.sectionHead, color: surface.theme.color(.textPrimary), truncation: .byWordWrapping)
+        let measured = ceil((heading as NSString).boundingRect(with: CGSize(width: max(1, titleWidth), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs).height) + NativeSpace.xs
+        let otherYear = projection.day.year != state.snapshot.clock.today.year
+        let sample = state.snapshot.board.settings.language == .ko ? (otherYear ? "8888년 12월 30일 수요일" : "12월 30일 수요일") : (otherYear ? "Wednesday, September 30, 8888" : "Wednesday, September 30")
+        let reserved = ceil((sample as NSString).boundingRect(with: CGSize(width: max(1, titleWidth), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs).height) + NativeSpace.xs
+        let canReserve = headerTop + reserved + controlHeight + NativeSize.compactTarget + NativeSpace.sm <= height
+        let titleHeight = useSelectedHeader ? (canReserve ? max(measured, reserved) : measured) : controlHeight
+        let header = useSelectedHeader ? headerTop + titleHeight + controlHeight : baseHeader
+        let titleRect = CGRect(x: inset, y: headerTop, width: titleWidth, height: titleHeight)
+        var items = [NativeRenderItem(id: prefix + "title", rect: titleRect, label: heading, kind: .text)]
         let count = context.text(projection.rows.count == 1 ? "calendar.events.one" : "calendar.events.other", values: ["0": String(projection.rows.count)])
         let meta = dayFormatter.string(from: projection.day.date(in: zone)) + " · " + count
-        if !compact {
+        if !compact && !useSelectedHeader {
             items.append(NativeRenderItem(id: prefix + "date", rect: CGRect(x: inset, y: header - NativeSpace.lg, width: contentWidth, height: NativeSpace.lg), label: meta, kind: .text, color: .textSecondary))
-        } else { items[0].value = meta }
-        if selected && !readOnly {
-            items.append(NativeRenderItem(id: "agenda-back-today", rect: CGRect(x: width - inset - addWidth - NativeSpace.sm - backWidth, y: headerTop, width: backWidth, height: controlHeight), label: context.text("today.back_to_today"), kind: .button, value: backLabel, color: .accentBlue, minimumTarget: controlHeight))
+        } else { items[0].value = useSelectedHeader ? count : meta }
+        if useSelectedHeader {
+            items.append(NativeRenderItem(id: "agenda-back-today", rect: CGRect(x: inset, y: headerTop + titleHeight, width: backWidth, height: controlHeight), label: backLabel, kind: .button, value: backLabel, color: .accentBlue, minimumTarget: 44))
+            let countWidth = ceil((count as NSString).size(withAttributes: [.font: NativeFont.badge]).width)
+            let countX = inset + backWidth + NativeSpace.sm
+            if countX + countWidth + NativeSpace.sm <= width - inset - addWidth {
+                items.append(NativeRenderItem(id: prefix + "date", rect: CGRect(x: countX, y: headerTop + titleHeight + (controlHeight - NativeSpace.lg) / 2, width: countWidth, height: NativeSpace.lg), label: count, kind: .text, color: .textSecondary))
+            }
         }
         if !readOnly {
-            items.append(NativeRenderItem(id: "agenda-add", rect: CGRect(x: width - inset - addWidth, y: headerTop, width: addWidth, height: controlHeight), label: context.text("toolbar.new_event"), kind: .button, minimumTarget: controlHeight))
+            items.append(NativeRenderItem(id: "agenda-add", rect: CGRect(x: width - inset - addWidth, y: useSelectedHeader ? headerTop + titleHeight : headerTop, width: addWidth, height: controlHeight), label: context.text("toolbar.new_event"), kind: .button, minimumTarget: controlHeight))
         }
         if let slot, !readOnly {
             items[0] = NativePanelHeader.decorate(items[0], geometry: PanelHeaderGeometry(slot: slot, titleRect: titleRect,
                 headerRect: metrics.regions(in: surface.bounds, headerHeight: header).headerRect,
                 excludedRects: items.filter { $0.id == "agenda-add" || $0.id == "agenda-back-today" }.map(\.hitRect)))
         }
+        let summaryInScroll = useSelectedHeader && !wide && heightStep == .tiny
+        var scrolledSummary: NativeRenderItem?
         if fixedDay == nil {
             let next = projection.next
             let title = next.map { context.text(selected ? "today.next_today_label" : "today.next_label", values: ["0": $0.item.title]) } ?? context.text("today.clear")
             let remaining = next.map { max(0, Int(ceil($0.item.start.timeIntervalSince(state.snapshot.clock.now.date) / 60))) } ?? 0
             let time = next.map { remaining < 60 ? context.text("today.in_minutes", values: ["0": String(remaining)]) : context.text("today.at_time", values: ["0": timeFormatter.string(from: $0.item.start)]) } ?? ""
-            items.append(NativeRenderItem(id: "agenda-next", rect: CGRect(x: inset, y: header + NativeSpace.xs, width: summaryWidth - (wide ? NativeSpace.md : 0), height: nextHeight), label: title, kind: .badge, value: time, fill: .raised, radius: NativeRadius.input))
+            let summary = NativeRenderItem(id: "agenda-next", rect: CGRect(x: inset, y: summaryInScroll ? 0 : header + NativeSpace.xs, width: summaryWidth - (wide ? NativeSpace.md : 0), height: nextHeight), label: title, kind: .badge, value: time, fill: .raised, radius: NativeRadius.input)
+            if summaryInScroll { scrolledSummary = summary } else { items.append(summary) }
         }
-        let listY = fixedDay != nil || wide ? header + NativeSpace.xs : header + nextHeight + NativeSpace.sm
+        let listY = fixedDay != nil || wide || summaryInScroll ? header + NativeSpace.xs : header + nextHeight + NativeSpace.sm
         let listX = wide ? inset + summaryWidth : 0
         let rowMetrics = metrics.listRow!
         let rowHeight = rowMetrics.height, rowGap = rowMetrics.gap
@@ -168,13 +187,14 @@ struct AgendaProjection: Equatable {
         let documentWidth = scroll.contentSize.width
         let available = max(0, documentWidth - inset * 2 - (columns == 2 ? NativeSpace.md : 0))
         let columnWidth = available / CGFloat(columns)
+        let listOffset = scrolledSummary.map { $0.rect.height + NativeSpace.xs } ?? 0
         var counters = [0, 0], rowItems: [NativeRenderItem] = []
         var details: [String: AgendaRowPaint] = [:]
         for (index, event) in projection.rows.enumerated() {
             let hour = Calendar(identifier: .gregorian).dateComponents(in: zone, from: event.item.start).hour ?? 0
             // Tiny shows two chronological events; larger steps retain morning/afternoon columns.
             let column = wide && heightStep == .tiny ? index % columns : columns == 2 && !event.item.allDay && event.item.start >= dayStart && hour >= 12 ? 1 : 0
-            let rect = CGRect(x: inset + CGFloat(column) * (columnWidth + NativeSpace.md), y: CGFloat(counters[column]) * (rowHeight + rowGap), width: columnWidth, height: rowHeight)
+            let rect = CGRect(x: inset + CGFloat(column) * (columnWidth + NativeSpace.md), y: listOffset + CGFloat(counters[column]) * (rowHeight + rowGap), width: columnWidth, height: rowHeight)
             counters[column] += 1
             let pinned = state.snapshot.board.pinnedEventKeys.contains(event.pinKey)
             let projectID = state.snapshot.board.eventProjectLinks[event.pinKey] ?? state.snapshot.board.eventProjectLinks[event.id]
@@ -195,8 +215,9 @@ struct AgendaProjection: Equatable {
         if rowItems.isEmpty {
             let error = state.lastError
             let label = loading ? context.text("loading.label") : error.map { context.text($0.messageKey, values: $0.values) } ?? context.text("today.empty")
-            rowItems.append(NativeRenderItem(id: prefix + "status", rect: CGRect(x: inset, y: compact ? 0 : NativeSpace.sm, width: max(0, documentWidth - inset * 2), height: rowHeight * 2), label: label, kind: .text, color: error == nil ? .textQuiet : .danger))
+            rowItems.append(NativeRenderItem(id: prefix + "status", rect: CGRect(x: inset, y: listOffset + (compact ? 0 : NativeSpace.sm), width: max(0, documentWidth - inset * 2), height: rowHeight * 2), label: label, kind: .text, color: error == nil ? .textQuiet : .danger))
         }
+        if let scrolledSummary { rowItems.insert(scrolledSummary, at: 0) }
         let contentHeight = rowItems.map(\.rect.maxY).max() ?? 0
         list.frame = CGRect(x: 0, y: 0, width: documentWidth, height: max(scroll.contentSize.height, contentHeight + NativeSpace.xs))
         list.details = details; list.update(items: rowItems); surface.update(items: items); scroll.updateFade()
@@ -257,6 +278,17 @@ struct AgendaProjection: Equatable {
     func dispose() { agenda.dispose() }
 }
 
+@MainActor private func paintAgendaSummary(_ item: NativeRenderItem, theme: NativeTheme) {
+    if let fill = item.fill { theme.color(fill).setFill(); NSBezierPath(roundedRect: item.rect, xRadius: item.radius, yRadius: item.radius).fill() }
+    let time = item.value ?? ""
+    let timeWidth = (time as NSString).size(withAttributes: [.font: NativeFont.badge]).width
+    let y = item.rect.midY - NativeSpace.sm
+    theme.color(.accentBlue).setFill()
+    NSBezierPath(ovalIn: CGRect(x: item.rect.minX + NativeSpace.sm, y: item.rect.midY - NativeSpace.xxs, width: NativeSpace.xs, height: NativeSpace.xs)).fill()
+    let titleX = item.rect.minX + NativeSpace.xxl
+    (item.label as NSString).draw(in: CGRect(x: titleX, y: y, width: max(0, item.rect.maxX - NativeSpace.sm * 2 - timeWidth - titleX), height: NativeSpace.lg), withAttributes: NativeFont.attributes(font: NativeFont.primary, color: theme.color(.textPrimary)))
+    (time as NSString).draw(in: CGRect(x: item.rect.maxX - NativeSpace.sm - timeWidth, y: y + NativeSpace.xxs, width: timeWidth, height: NativeSpace.lg), withAttributes: NativeFont.attributes(font: NativeFont.badge, color: theme.color(.textSecondary)))
+}
 @MainActor final class AgendaPanelView: PanelContainerView {
     var onLayout: (@MainActor () -> Void)?
     override func layout() { super.layout(); onLayout?() }
@@ -264,22 +296,12 @@ struct AgendaProjection: Equatable {
         if item.panelHeader != nil { var feedback = item; feedback.label = ""; super.paint(feedback) }
         if item.id == "agenda-add" || item.id == "agenda-back-today" { var visual = item; visual.label = item.id == "agenda-add" ? "+" : (item.value ?? item.label); super.paint(visual); return }
         if item.kind == .button { super.paint(item); return }
+        if item.id == "agenda-next" { paintAgendaSummary(item, theme: theme); return }
         if let fill = item.fill { theme.color(fill).setFill(); NSBezierPath(roundedRect: item.rect, xRadius: item.radius, yRadius: item.radius).fill() }
-        if item.id == "agenda-next" {
-            let time = item.value ?? ""
-            let timeWidth = (time as NSString).size(withAttributes: [.font: NativeFont.badge]).width
-            let y = item.rect.midY - NativeSpace.sm
-            theme.color(.accentBlue).setFill()
-            NSBezierPath(ovalIn: CGRect(x: item.rect.minX + NativeSpace.sm, y: item.rect.midY - NativeSpace.xxs, width: NativeSpace.xs, height: NativeSpace.xs)).fill()
-            let titleX = item.rect.minX + NativeSpace.xxl
-            (item.label as NSString).draw(in: CGRect(x: titleX, y: y, width: max(0, item.rect.maxX - NativeSpace.sm * 2 - timeWidth - titleX), height: NativeSpace.lg), withAttributes: NativeFont.attributes(font: NativeFont.primary, color: theme.color(.textPrimary)))
-            (time as NSString).draw(in: CGRect(x: item.rect.maxX - NativeSpace.sm - timeWidth, y: y + NativeSpace.xxs, width: timeWidth, height: NativeSpace.lg), withAttributes: NativeFont.attributes(font: NativeFont.badge, color: theme.color(.textSecondary)))
-            return
-        }
         let font = item.id.hasSuffix("title") ? NativeFont.sectionHead : NativeFont.badge
         let text = item.label
         let rect = item.rect.insetBy(dx: item.fill == nil ? 0 : NativeSpace.sm, dy: NativeSpace.xxs)
-        (text as NSString).draw(in: rect, withAttributes: NativeFont.attributes(font: font, color: theme.color(item.color)))
+        (text as NSString).draw(in: rect, withAttributes: NativeFont.attributes(font: font, color: theme.color(item.color), truncation: item.id.hasSuffix("title") ? .byWordWrapping : .byTruncatingTail))
     }
 }
 struct AgendaRowPaint {
@@ -305,6 +327,7 @@ struct AgendaRowPaint {
     }
     override func paint(_ item: NativeRenderItem) {
         guard let row = details[item.id] else {
+            if item.id == "agenda-next" { paintAgendaSummary(item, theme: theme); return }
             if item.kind == .text {
                 (item.label as NSString).draw(in: item.rect.insetBy(dx: 0, dy: NativeSpace.sm), withAttributes: NativeFont.attributes(font: NativeFont.body, color: theme.color(item.color), truncation: .byWordWrapping))
                 return

@@ -139,7 +139,7 @@ struct EnvironmentSnapshot: Sendable, Equatable {
 }
 enum StorageStatus: String, Sendable { case ready, demoMemory, protected, unavailable }
 enum LoginStatus: String, Sendable { case enabled, notRegistered, requiresApproval, notFound }
-enum CalendarAuthorization: String, Sendable { case notDetermined, denied, restricted, authorized, unavailable }
+enum CalendarAuthorization: String, Sendable { case notDetermined, denied, restricted, writeOnly, authorized, unavailable }
 
 struct ExternalProjection: Sendable {
     var weather: ExternalWeatherProjection

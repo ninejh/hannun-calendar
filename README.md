@@ -8,9 +8,9 @@ The calendar stays visible beside four configurable slots. Choose from Today, De
 
 ## Early beta download
 
-Release **v1.0.0-beta.1**: [Hannun-Calendar-arm64.dmg](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.1/Hannun-Calendar-arm64.dmg) · [Hannun-Calendar-arm64.zip](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.1/Hannun-Calendar-arm64.zip). Check `SHA256SUMS` in the same release before installing.
+Release **v1.0.0-beta.2**: [Hannun-Calendar-arm64.dmg](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.2/Hannun-Calendar-arm64.dmg) · [Hannun-Calendar-arm64.zip](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.2/Hannun-Calendar-arm64.zip). Check `SHA256SUMS` in the same release before installing.
 
-A reported calendar connection problem is still under investigation; its cause is not confirmed. This early beta does not claim complete macOS integration or acceptance-test coverage.
+This beta includes changes to calendar connection handling and board controls. A reported missing calendar permission prompt remains unverified and its cause is not confirmed; these changes do not establish that calendar connections work for every account. This early beta does not claim complete macOS integration or acceptance-test coverage.
 
 ## Requirements and build
 

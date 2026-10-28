@@ -16,11 +16,13 @@ import AppKit
     private var cities: [String: CatalogCity] = [:]
     private var results: [CatalogCity] = []
     private var searching = false
+    private struct EditRecovery { var id: UUID; var failure: AppFailure }
+    private var editRecovery: EditRecovery?
+    private var lookupFailed = false
+    private var editGeneration = 0
     private var loading = true
     private var queryGeneration = 0
     private var noticeKey: String?
-    private var failedOperation: UUID?
-    private var failedCommitted: Commitment = .no
     private var disposed = false
     private var windowObserver: NSObjectProtocol?
     private(set) var renderPassCount = 0
@@ -80,7 +82,7 @@ import AppKit
         if isRendering { render() } else if let layer = limitNotice.layer { NativeMotion.stop(layer) }
     }
     private func showLimit() {
-        noticeKey = "world_clock.max_limit_inline"; searching = false; search.isHidden = true; render()
+        noticeKey = "world_clock.max_limit_inline"; lookupFailed = false; searching = false; search.isHidden = true; render()
         viewport.contentView.scroll(to: .zero); viewport.reflectScrolledClipView(viewport.contentView); viewport.updateFade()
         if let layer = limitNotice.layer { NativeMotion.apply(.shake, to: layer, reduceMotion: context.presentation.state.snapshot.environment.reduceMotion) }
     }
@@ -92,7 +94,8 @@ import AppKit
         loadCities(query: search.stringValue)
     }
     private func closeSearch() {
-        searching = false; search.isHidden = true
+        searching = false; search.isHidden = true; queryGeneration += 1; loading = false
+        if lookupFailed { noticeKey = nil; lookupFailed = false }
         surface.window?.makeFirstResponder(surface); render(); context.focus.focus(FocusID("worldClock.add"))
     }
     func controlTextDidChange(_ notification: Notification) {
@@ -105,16 +108,18 @@ import AppKit
     }
     private func loadCities(query: String) {
         queryGeneration += 1; let generation = queryGeneration; loading = true
-        guard let handle = context.presentation.send(.command(.listCities(query: String(query.prefix(100))))) else { loading = false; return }
+        results = []; noticeKey = nil; lookupFailed = false; render()
+        guard let handle = context.presentation.send(.command(.listCities(query: String(query.prefix(100))))) else { loading = false; render(); return }
         Task { [weak self] in
             let receipt = await handle.settled.value
             guard let self, !self.disposed, self.queryGeneration == generation else { return }
             self.loading = false
             switch receipt {
             case .success(.cities(let values), _):
-                for city in values { self.cities[city.id] = city }; self.results = values; self.noticeKey = nil
-            case .failure(let error, _): self.noticeKey = error.messageKey
-            default: self.noticeKey = "error.generic"
+                for city in values { self.cities[city.id] = city }; self.results = values
+                if self.lookupFailed { self.noticeKey = nil; self.lookupFailed = false }
+            case .failure(let error, _): self.noticeKey = error.messageKey; self.lookupFailed = true
+            default: self.noticeKey = "error.generic"; self.lookupFailed = true
             }
             self.render()
         }
@@ -132,18 +137,43 @@ import AppKit
         if id.hasPrefix("worldClock.delete.") { deleteCity(String(id.dropFirst("worldClock.delete.".count))) }
         else if id.hasPrefix("worldClock.result.") { addCity(String(id.dropFirst("worldClock.result.".count))) }
         else if id == "worldClock.retry" {
-            if let failedOperation { watch(context.presentation.send(failedCommitted == .unknown ? .reconcile(failedOperation) : .retry(failedOperation))) }
-            else { loadCities(query: searching ? search.stringValue : "") }
+            if let edit = editRecovery {
+                if edit.failure.committed == .unknown {
+                    reconcileEdit(edit)
+                } else if let handle = context.presentation.send(.retry(edit.id)) {
+                    editRecovery = nil; watch(handle)
+                }
+            } else { loadCities(query: searching ? search.stringValue : "") }
         } else if id == "worldClock.close" { closeSearch() }
+    }
+    private func reconcileEdit(_ edit: EditRecovery) {
+        // The original operation's typed result is returned synchronously; nil is not success.
+        guard let result = context.presentation.reconcile(edit.id) else { return }
+        switch result {
+        case .success(.completed(.success)):
+            editRecovery = nil
+        case .success(.completed(.failure(let failure, _))):
+            editRecovery = EditRecovery(id: edit.id, failure: failure)
+        case .success(.notFound):
+            editRecovery = EditRecovery(id: edit.id, failure: AppFailure(code: .busyRetry, retryable: true))
+        case .success(.pending): break
+        case .success(.retired):
+            editRecovery = EditRecovery(id: edit.id, failure: AppFailure(code: .requestRetired, messageKey: "error.request_retired", committed: .unknown))
+        case .failure(let failure):
+            var uncertain = failure; uncertain.committed = .unknown
+            editRecovery = EditRecovery(id: edit.id, failure: uncertain)
+        }
+        render()
     }
     private func watch(_ handle: OperationHandle?) {
         guard let handle else { return }
+        editGeneration += 1; let generation = editGeneration
         Task { [weak self] in
             let receipt = await handle.settled.value
-            guard let self, !self.disposed else { return }
+            guard let self, !self.disposed, self.editGeneration == generation else { return }
             if case .failure(let error, _) = receipt {
-                self.noticeKey = error.messageKey; self.failedOperation = handle.id; self.failedCommitted = error.committed
-            } else { self.noticeKey = nil; self.failedOperation = nil }
+                self.editRecovery = EditRecovery(id: handle.id, failure: error)
+            } else if self.editRecovery?.id == handle.id { self.editRecovery = nil }
             self.render()
         }
     }
@@ -186,6 +216,7 @@ import AppKit
         func text(_ id: String, _ value: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, font: NSFont, color: NativeColorToken = .textPrimary) {
             items.append(NativeRenderItem(id: id, rect: CGRect(x: x, y: y, width: max(0, width), height: height), label: value, kind: .text, color: color)); content.fonts[id] = font
         }
+        let noticeKey = editRecovery?.failure.messageKey ?? self.noticeKey
         let showingLimit = noticeKey == "world_clock.max_limit_inline"
         if !tick { limitNotice.isHidden = !showingLimit }
         if showingLimit {
@@ -204,10 +235,12 @@ import AppKit
             content.visibleLabels["worldClock.close"] = "×"; y += NativeSize.toolbarHeight + NativeSpace.sm
             let selected = Set(snapshot.board.worldClockCities.map(\.id))
             for city in results {
-                items.append(NativeRenderItem(id: "worldClock.result.\(city.id)", rect: CGRect(x: 0, y: y, width: width, height: NativeSize.toolbarHeight), label: snapshot.board.settings.language == .ko ? city.nameKO : city.nameEN, kind: .button, enabled: !selected.contains(city.id)))
+                let name = snapshot.board.settings.language == .ko ? city.nameKO : city.nameEN
+                let added = selected.contains(city.id)
+                items.append(NativeRenderItem(id: "worldClock.result.\(city.id)", rect: CGRect(x: 0, y: y, width: width, height: NativeSize.toolbarHeight), label: name + (added ? " · " + context.text("clock.added") : ""), kind: .button, enabled: !added))
                 y += NativeSize.toolbarHeight + NativeSpace.xs
             }
-            if results.isEmpty && !loading { text("worldClock.noResults", context.text("world_clock.search_no_results"), x: 0, y: y, width: width, height: headerHeight, font: NativeFont.primary); y += headerHeight }
+            if results.isEmpty && !loading && noticeKey == nil { text("worldClock.noResults", context.text("world_clock.search_no_results"), x: 0, y: y, width: width, height: headerHeight, font: NativeFont.primary); y += headerHeight }
         } else {
             let columns = metrics?.columnCapacity(in: surface.bounds.width) ?? (variant == .wide ? max(1, min(4, Int((width + NativeSpace.md) / (NativeSize.projectMinWidth / 2 + NativeSpace.md)))) : 1)
             let cardWidth = max(0, (width - CGFloat(columns - 1) * NativeSpace.md) / CGFloat(columns))
@@ -245,7 +278,8 @@ import AppKit
         if loading { text("worldClock.loading", context.text("loading.label"), x: 0, y: y, width: width, height: headerHeight, font: NativeFont.primary, color: .textQuiet); y += headerHeight }
         if let noticeKey, !showingLimit {
             text("worldClock.notice", context.text(noticeKey), x: 0, y: y, width: width, height: headerHeight * 2, font: NativeFont.primary, color: .danger); y += headerHeight * 2
-            if noticeKey != "world_clock.max_limit_inline" {
+            let editCanRecover = editRecovery.map { $0.failure.committed == .unknown || ($0.failure.committed == .no && ($0.failure.retryable || $0.failure.code == .boardConflict)) } ?? true
+            if noticeKey != "world_clock.max_limit_inline" && editCanRecover {
                 items.append(NativeRenderItem(id: "worldClock.retry", rect: CGRect(x: 0, y: y, width: width, height: headerHeight), label: context.text("error.retry_action"), kind: .button)); y += headerHeight
             }
         }

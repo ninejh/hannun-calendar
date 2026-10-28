@@ -28,7 +28,12 @@ import AppKit
         let paintedWidth = (totalLabel as NSString).size(withAttributes: NativeFont.attributes(font: NativeFont.primary, color: .labelColor)).width + NativeSpace.lg
         return paintedWidth > bounds.width - horizontalPadding * 2 ? NativeFont.eventTime : NativeFont.primary
     }
-    private var totalOnSecondRow: Bool { totalWidth + NativeSize.compactTarget * 3 > bounds.width - horizontalPadding * 2 }
+    private var unitLabel: String { context.text("sub.monthly_equivalent") }
+    private var unitWidth: CGFloat {
+        (unitLabel as NSString).size(withAttributes: NativeFont.attributes(font: NativeFont.primary, color: .labelColor)).width + NativeSpace.lg
+    }
+    private var unitInContent: Bool { totalWidth + unitWidth > bounds.width - horizontalPadding * 2 }
+    private var totalOnSecondRow: Bool { totalWidth + unitWidth + NativeSize.compactTarget * 3 > bounds.width - horizontalPadding * 2 }
     private var totalRowHeight: CGFloat { totalOnSecondRow ? NativeSize.compactTarget : 0 }
     private var partialHeight: CGFloat {
         partialMessage.isEmpty ? 0 : isCompactStep ? EditingPanelCanvas.wrappedHeight(partialMessage, width: bounds.width - horizontalPadding * 2) : NativeSize.toolbarHeight * 2
@@ -111,13 +116,16 @@ import AppKit
         let width = max(0, bounds.width - horizontalPadding * 2)
         let label = totalLabel
         let details = summary.byCurrency.map { Self.money($0.monthlyAmount, currency: $0.currency, locale: snapshot.environment.localeIdentifier) }.joined(separator: " + ")
-        let totalWidth = totalOnSecondRow ? width : min(width, self.totalWidth)
-        let titleWidth = max(0, width - (totalOnSecondRow ? 0 : totalWidth) - NativeSize.compactTarget)
+        let totalWidth = min(width, self.totalWidth)
+        let unitWidth = min(width, self.unitWidth)
+        let titleWidth = max(0, width - (totalOnSecondRow ? (unitInContent ? unitWidth : 0) : totalWidth + unitWidth) - NativeSize.compactTarget)
         var header = [
             NativeRenderItem(id: "subscriptions.title", rect: CGRect(x: horizontalPadding, y: headerItemY, width: titleWidth, height: headerItemHeight), label: context.text("sub.title"), kind: .text),
             NativeRenderItem(id: "subscriptions.add", rect: CGRect(x: bounds.width - horizontalPadding - NativeSize.compactTarget, y: headerItemY, width: NativeSize.compactTarget, height: headerItemHeight), label: context.text("sub.add_btn"), kind: .button),
-            NativeRenderItem(id: "subscriptions.total", rect: CGRect(x: bounds.width - horizontalPadding - totalWidth - (totalOnSecondRow ? 0 : NativeSize.compactTarget), y: totalOnSecondRow ? super.headerHeight : headerItemY, width: totalWidth, height: totalOnSecondRow ? totalRowHeight : headerItemHeight), label: label, kind: .text, value: details)
+            NativeRenderItem(id: "subscriptions.total", rect: CGRect(x: bounds.width - horizontalPadding - totalWidth - (totalOnSecondRow ? 0 : NativeSize.compactTarget), y: totalOnSecondRow ? super.headerHeight : headerItemY, width: totalWidth, height: totalOnSecondRow ? totalRowHeight : headerItemHeight), label: label, kind: .text, value: unitLabel + (details.isEmpty ? "" : " · " + details))
         ]
+        let unitX = unitInContent ? bounds.width - horizontalPadding - NativeSize.compactTarget - unitWidth : (totalOnSecondRow ? horizontalPadding : bounds.width - horizontalPadding - NativeSize.compactTarget - totalWidth - unitWidth)
+        header.append(NativeRenderItem(id: "subscriptions.unit", rect: CGRect(x: unitX, y: totalOnSecondRow && !unitInContent ? super.headerHeight : headerItemY, width: unitWidth, height: totalOnSecondRow && !unitInContent ? totalRowHeight : headerItemHeight), label: unitLabel, kind: .text, color: .textSecondary))
         if !scrollsSupplement, !partialMessage.isEmpty { header.append(NativeRenderItem(id: "subscriptions.partial", rect: CGRect(x: horizontalPadding, y: super.headerHeight + totalRowHeight, width: width, height: partialHeight), label: partialMessage, kind: .text, color: .textQuiet)) }
         if !scrollsSupplement, !rateDetails.isEmpty { header.append(NativeRenderItem(id: "subscriptions.credit", rect: CGRect(x: horizontalPadding, y: bounds.height - bottomInset, width: width, height: bottomInset), label: rateDetails, kind: .button, color: .textQuiet)) }
         updateHeader(header + statusItems())
@@ -161,9 +169,9 @@ import AppKit
         if values.isEmpty {
             let message = context.text("sub.empty")
             let height = EditingPanelCanvas.wrappedHeight(message, width: scroll.contentSize.width)
-            items.append(NativeRenderItem(id: "subscriptions.empty", rect: CGRect(x: 0, y: 0, width: scroll.contentSize.width, height: height), label: message, kind: .text, color: .textQuiet))
+            items.append(NativeRenderItem(id: "subscriptions.empty", rect: CGRect(x: 0, y: y, width: scroll.contentSize.width, height: height), label: message, kind: .text, color: .textQuiet))
             contentCanvas.wrappedText["subscriptions.empty"] = message
-            y = max(y, height)
+            y += height
         }
         if scrollsSupplement, !partialMessage.isEmpty {
             let height = EditingPanelCanvas.wrappedHeight(partialMessage, width: scroll.contentSize.width)

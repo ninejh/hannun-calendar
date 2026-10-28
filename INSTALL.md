@@ -1,8 +1,8 @@
 # Install the beta / 베타 설치
 
-Requires an Apple silicon Mac with macOS 14 or later. This beta is ad hoc signed and is not notarized. The release label is 1.0.0-beta.1; the app's existing bundle version remains 1.0 (build 1).
+Requires an Apple silicon Mac with macOS 14 or later. This beta is ad hoc signed and is not notarized. The release label is 1.0.0-beta.2; the app's existing bundle version remains 1.0 (build 1).
 
-The release files are `Hannun-Calendar-arm64.dmg`, `Hannun-Calendar-arm64.zip` and `SHA256SUMS`. If using ZIP, extract it and move Hannun Calendar to Applications. A reported calendar connection issue remains under investigation; its cause is not confirmed.
+The release files are `Hannun-Calendar-arm64.dmg`, `Hannun-Calendar-arm64.zip` and `SHA256SUMS`. If using ZIP, extract it and move Hannun Calendar to Applications. A reported missing calendar permission prompt remains unverified and its cause is not confirmed; calendar connection has not been verified for every account.
 
 1. Open the downloaded DMG and drag Hannun Calendar to Applications. Quit an existing copy before replacing it. Back up its local board data before upgrading.
 2. If macOS blocks the app, open System Settings → Privacy & Security and use **Open Anyway** for this app if offered, then confirm the prompt. Apple describes this per-app process at https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unidentified-developer-mh40616/mac. System Settings wording can vary by macOS version.

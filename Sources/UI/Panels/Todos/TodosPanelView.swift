@@ -250,8 +250,9 @@ import AppKit
             items.append(NativeRenderItem(id: key + ".delete", rect: CGRect(x: x + width - NativeSize.compactTarget, y: y, width: NativeSize.compactTarget, height: rowHeight), label: context.text("item.delete_label", values: ["0": value.title]), kind: .button, color: .textQuiet))
             contentCanvas.displayText[key + ".delete"] = "×"
         }
-        if values.isEmpty { items.append(NativeRenderItem(id: "todos.empty", rect: CGRect(x: 0, y: NativeSpace.sm, width: scroll.contentSize.width, height: NativeSize.toolbarHeight), label: context.text("todo.empty"), kind: .text, color: .textQuiet)) }
+        if values.isEmpty { items.append(NativeRenderItem(id: "todos.empty", rect: CGRect(x: 0, y: NativeSpace.sm, width: scroll.contentSize.width, height: NativeSize.toolbarHeight), label: context.text(snapshot.board.todos.isEmpty ? "todo.empty_new" : "todo.empty"), kind: .text, color: .textQuiet)) }
         var height = CGFloat((values.count + columns - 1) / columns) * (rowHeight + gap) + NativeSpace.sm
+        if values.isEmpty { height += NativeSize.toolbarHeight }
         if isCompactStep {
             var item = collapseItem; item.rect = CGRect(x: 0, y: height, width: scroll.contentSize.width, height: NativeSize.compactTarget)
             items.append(item); height = item.rect.maxY + stepMetrics.itemGap
