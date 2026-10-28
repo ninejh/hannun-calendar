@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151614">
+  <meta name="description" content="하루의 일정, 가까워지는 마감, 진행 중인 프로젝트. Mac 바탕화면에서 한눈에 보는 Hannun Calendar. macOS 14 이상, Apple Silicon용 오픈소스 캘린더 보드.">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Hannun Calendar — 하루를 한눈에.</title>
+  <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
+  <link rel="stylesheet" href="styles.css">
+  <script src="release-config.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+  <header class="site-header wrap">
+    <a class="brand" href="#" aria-label="Hannun Calendar 홈"><img src="assets/mark.svg" width="34" height="34" alt=""><span>Hannun<span class="brand-light"> Calendar</span></span></a>
+    <nav aria-label="주요 메뉴">
+      <a class="nav-story" href="#experience">둘러보기</a>
+      <a class="nav-source" href="https://github.com/ninejh/hannun-calendar" data-release-link="repository">GitHub <span aria-hidden="true">↗</span></a>
+      <a class="nav-download" href="#download">다운로드 <span aria-hidden="true">↓</span></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-heading">
+        <div>
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> A LITTLE CLARITY FOR YOUR MAC</p>
+          <h1 id="hero-title">흩어진 하루를,<br><span>한눈에.</span></h1>
+        </div>
+        <div class="hero-aside">
+          <p class="hero-description">오늘의 일정부터 다가오는 마감까지.<br>바탕화면을 나만의 캘린더 보드로.</p>
+          <a class="button button-primary" href="#download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></svg>Mac용 다운로드</a>
+          <p class="compatibility">macOS 14+ · Apple Silicon · 얼리 베타</p>
+        </div>
+      </div>
+      <figure class="hero-showcase">
+        <div class="showcase-topline"><span><span class="small-mark" aria-hidden="true">✳</span> YOUR DAY, IN VIEW.</span><span>캘린더 하나. 나를 위한 네 칸.</span></div>
+        <div class="board-stage" aria-label="Hannun Calendar 예시 보드">
+          <img class="board-static" src="assets/hannun-demo-small.png" srcset="assets/hannun-demo-small.png 1512w, assets/hannun-demo.png 3024w" sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1400px) calc(100vw - 104px), 1240px" width="3024" height="1898" fetchpriority="high" alt="실제 앱의 가상 예시 데이터: 왼쪽의 2026년 10월 달력과 프로젝트, 오른쪽의 오늘 일정, 마감, 구독 패널.">
+          <div class="board-layers" aria-hidden="true">
+            <img class="board-piece piece-calendar" src="assets/hannun-demo-small.png" srcset="assets/hannun-demo-small.png 1512w, assets/hannun-demo.png 3024w" sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1400px) calc(100vw - 104px), 1240px" width="3024" height="1898" alt="">
+            <img class="board-piece piece-projects" src="assets/hannun-demo-small.png" srcset="assets/hannun-demo-small.png 1512w, assets/hannun-demo.png 3024w" sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1400px) calc(100vw - 104px), 1240px" width="3024" height="1898" alt="">
+            <img class="board-piece piece-today" src="assets/hannun-demo-small.png" srcset="assets/hannun-demo-small.png 1512w, assets/hannun-demo.png 3024w" sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1400px) calc(100vw - 104px), 1240px" width="3024" height="1898" alt="">
+            <img class="board-piece piece-deadlines" src="assets/hannun-demo-small.png" srcset="assets/hannun-demo-small.png 1512w, assets/hannun-demo.png 3024w" sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1400px) calc(100vw - 104px), 1240px" width="3024" height="1898" alt="">
+            <img class="board-piece piece-subscriptions" src="assets/hannun-demo-small.png" srcset="assets/hannun-demo-small.png 1512w, assets/hannun-demo.png 3024w" sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1400px) calc(100vw - 104px), 1240px" width="3024" height="1898" alt="">
+          </div>
+        </div>
+        <figcaption><span>실제 앱 렌더링 · 가상 예시 데이터</span><a href="assets/hannun-demo.png">이미지 크게 보기 <span aria-hidden="true">↗</span></a></figcaption>
+      </figure>
+      <div class="hero-footnote"><span>MADE FOR THE WAY YOUR DAY UNFOLDS</span><a href="#experience">천천히 둘러보기 <span aria-hidden="true">↓</span></a></div>
+    </section>
+
+    <section class="experience wrap section-space" id="experience" aria-labelledby="experience-title">
+      <div class="section-heading"><p class="eyebrow">01 / A PLACE FOR EVERYTHING</p><h2 id="experience-title">해야 할 일도.<br>잊고 싶지 않은 일도.</h2><p class="section-intro">크게 보는 달력을 중심으로,<br>하루에 필요한 정보를 곁에 둡니다.</p></div>
+      <div class="story-layout">
+        <div class="story-visual">
+          <div class="story-window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>Hannun Calendar</span></div>
+            <div class="story-image-wrap"><img class="story-image" src="assets/hannun-demo-small.png" srcset="assets/hannun-demo-small.png 1512w, assets/hannun-demo.png 3024w" sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1400px) calc(100vw - 104px), 1240px" width="3024" height="1898" loading="lazy" alt="한 화면에 놓인 달력과 네 개의 패널. 아래 설명은 이 예시 보드의 각 영역을 소개합니다."><div class="story-shade" aria-hidden="true"></div></div>
+            <div class="story-indicator" aria-hidden="true"><span class="story-current">한 달의 흐름</span><span class="story-count">01 / 03</span></div>
+          </div>
+          <p class="visual-note">가상 데이터로 구성한 실제 앱 화면입니다.</p>
+          <div class="story-track" aria-hidden="true"><span></span></div>
+        </div>
+        <div class="story-copy">
+          <article class="story-step" data-story="0"><span class="step-number">01</span><h3>먼저, 한 달의 흐름을.</h3><p>월간 보기로 일정을 넓게 펼치고, 주간 보기로 이번 주에 집중하세요. 날짜를 고르면 그날의 일정을 함께 살펴볼 수 있어요.</p><span class="feature-detail">월간·주간 보기 <span aria-hidden="true">/</span> 날짜별 일정</span></article>
+          <article class="story-step" data-story="1"><span class="step-number">02</span><h3>오늘과 마감은 가까이.</h3><p>다음 일정은 Today에서, 중요한 날짜는 Deadlines에서. D-Day와 고정한 일정이 하루의 우선순위를 정리해 줍니다.</p><span class="feature-detail">오늘의 일정 <span aria-hidden="true">/</span> D-Day·마감</span></article>
+          <article class="story-step" data-story="2"><span class="step-number">03</span><h3>작은 진전도 놓치지 않게.</h3><p>프로젝트의 진행률과 목표일을 함께 보고, 연결한 일정까지 이어서 확인하세요. 여러 곳을 오가지 않아도 맥락이 남습니다.</p><span class="feature-detail">프로젝트 <span aria-hidden="true">/</span> 진행률·목표일</span></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="panels-section section-space" aria-labelledby="panels-title">
+      <div class="wrap panels-layout">
+        <div class="panel-introduction"><p class="eyebrow">02 / MAKE ROOM FOR YOU</p><h2 id="panels-title">네 칸 안에,<br>나만의 리듬.</h2><p>아홉 가지 패널 중 필요한 것을 골라요.<br>칸을 우클릭해 바꾸고, 경계선을 끌어<br>네 단계로 크기를 맞출 수 있습니다.</p><p class="quiet-note">달력은 늘 그 자리에.<br>패널 선택과 배치는 이 Mac에 저장됩니다.</p></div>
+        <div class="panel-catalog" aria-label="선택할 수 있는 아홉 가지 패널">
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">◷</span><div><h3>오늘의 일정</h3><p>다음 일정, 오늘의 흐름</p></div><span class="catalog-en" lang="en">Today</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">⚑</span><div><h3>마감</h3><p>다가오는 날짜와 D-Day</p></div><span class="catalog-en" lang="en">Deadlines</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">◒</span><div><h3>프로젝트</h3><p>목표일까지, 한 걸음씩</p></div><span class="catalog-en" lang="en">Projects</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">≡</span><div><h3>빠른 메모</h3><p>문득 떠오른 생각의 자리</p></div><span class="catalog-en" lang="en">Quick notes</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">↻</span><div><h3>구독</h3><p>직접 적고 살펴보는 다음 결제일</p></div><span class="catalog-en" lang="en">Subscriptions</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">✓</span><div><h3>할 일</h3><p>하나씩 적고, 하나씩 완료</p></div><span class="catalog-en" lang="en">To-do</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">⠿</span><div><h3>습관</h3><p>매일의 체크와 연속 기록</p></div><span class="catalog-en" lang="en">Habits</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">◎</span><div><h3>세계 시계</h3><p>서로 다른 도시의 지금</p></div><span class="catalog-en" lang="en">World Clock</span></div>
+          <div class="catalog-row"><span class="catalog-symbol" aria-hidden="true">◴</span><div><h3>집중 타이머</h3><p>집중과 휴식에 나만의 간격</p></div><span class="catalog-en" lang="en">Focus Timer</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="details-section wrap section-space" aria-labelledby="details-title">
+      <p class="eyebrow">03 / AT HOME ON YOUR MAC</p>
+      <h2 id="details-title">익숙한 Mac에,<br>자연스럽게.</h2>
+      <div class="details-grid">
+        <article><div class="detail-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="5" y="7" width="22" height="21" rx="4"/><path d="M5 14h22M11 4v6m10-6v6m-10 9h3m4 0h3m-10 5h3"/></svg></div><h3>쓰던 캘린더를 그대로</h3><p>macOS에 등록한 iCloud, Google, Exchange 캘린더를 연결합니다. 계정 인증과 동기화는 macOS가 관리해요.</p><p class="detail-note">연결에는 캘린더 전체 접근 권한이 필요합니다.</p></article>
+        <article><div class="detail-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="4" y="5" width="24" height="18" rx="3"/><path d="M11 28h10m-5-5v5m-4-15 3 3 6-6"/></svg></div><h3>내 보드는 이 Mac에</h3><p>메모, 프로젝트, 패널 배치는 로컬에 저장됩니다. 앱 자체 서버와 분석 도구는 없고, 별도 계정을 만들 필요도 없어요.</p><p class="detail-note">보드 데이터는 암호화되지 않은 로컬 파일입니다.</p></article>
+        <article><div class="detail-icon weather-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="6"/><path d="M16 2v4m0 20v4M2 16h4m20 0h4M6 6l3 3m14 14 3 3M6 26l3-3M23 9l3-3"/></svg></div><h3>날씨와 환율은 선택</h3><p>고른 도시의 날씨를 날짜 곁에, 외화 구독은 원화 합계로. 설정에서 외부 조회를 끌 수 있고, 나머지 보드는 계속 쓸 수 있어요.</p><p class="detail-note">도시 좌표·통화 코드와 연결 정보가 제공업체로 전송됩니다.</p></article>
+      </div>
+      <p class="provider-note">날씨: <a href="https://open-meteo.com/">Open-Meteo</a> · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> · 아이콘으로 요약 · 무료 서비스는 비상업용. 환율: <a href="https://frankfurter.dev/">Frankfurter</a> · ECB 데이터. 제공업체 이용 조건은 앱의 MIT 라이선스와 별개입니다.</p>
+    </section>
+
+    <section class="download-section" id="download" aria-labelledby="download-title">
+      <div class="wrap download-layout">
+        <div><p class="eyebrow">A CLEARER DAY STARTS HERE</p><h2 id="download-title">내일의 하루도,<br><span>한눈에.</span></h2><p class="download-description">나의 Mac, 나의 일정, 나의 속도로.</p></div>
+        <div class="download-action"><p class="release-label"><span class="status-dot" aria-hidden="true"></span> EARLY BETA <span data-release-version>macOS</span></p><a class="button button-primary button-large" href="https://github.com/ninejh/hannun-calendar/releases" data-release-link="dmg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></svg>Mac용 다운로드 <span class="file-type">.dmg</span></a><p class="download-requirements">macOS 14 이상 · Apple Silicon (M 시리즈)</p><div class="secondary-downloads"><a href="https://github.com/ninejh/hannun-calendar/releases" data-release-link="zip">ZIP으로 받기 <span aria-hidden="true">↓</span></a><a href="https://github.com/ninejh/hannun-calendar/releases" data-release-link="notes">릴리스 노트 <span aria-hidden="true">↗</span></a></div><p class="beta-note">초기 베타이며 Developer ID 서명·Apple 공증이 되어 있지 않습니다. 설치 전에 아래 안내를 확인해 주세요.</p></div>
+      </div>
+    </section>
+
+    <section class="faq-section wrap section-space" id="install" aria-labelledby="faq-title">
+      <div><p class="eyebrow">BEFORE YOUR FIRST DAY</p><h2 id="faq-title">시작하기 전에.</h2><p class="faq-intro">첫 설치에 필요한 이야기.</p></div>
+      <div class="faq-list">
+        <details open><summary>어떤 Mac에서 사용할 수 있나요?<span aria-hidden="true">+</span></summary><div class="faq-answer"><p>macOS 14 Sonoma 이상을 사용하는 Apple Silicon Mac(M 시리즈)용입니다. 현재 다운로드 파일은 Intel Mac용이나 범용 바이너리가 아닙니다.</p></div></details>
+        <details><summary>다운로드한 다음에는 어떻게 설치하나요?<span aria-hidden="true">+</span></summary><div class="faq-answer"><p>DMG 파일을 열고 Hannun Calendar 앱을 응용 프로그램 폴더로 옮기세요. ZIP을 받았다면 압축을 푼 뒤 앱을 옮기면 됩니다. 기존 버전이 실행 중이라면 먼저 종료하세요.</p><p>업데이트 전에는 앱을 종료하고 로컬 보드 데이터를 별도로 백업해 두는 것이 좋습니다. 자세한 설치·백업 방법은 <a href="https://github.com/ninejh/hannun-calendar" data-release-link="repository">저장소 안내</a>에서 확인하세요.</p></div></details>
+        <details><summary>“개발자를 확인할 수 없음”이 표시돼요.<span aria-hidden="true">+</span></summary><div class="faq-answer"><p>이 초기 베타는 Developer ID 서명과 Apple 공증이 없어 macOS가 첫 실행을 차단할 수 있습니다. 공식 GitHub 릴리스에서 받은 파일인지 확인한 뒤, 신뢰하는 경우에만 시스템 설정 → 개인정보 보호 및 보안의 열기 허용 안내를 따라 주세요.</p><p>macOS 버전이나 관리 정책에 따라 표시가 다를 수 있습니다. 차단 사유가 손상 또는 악성 소프트웨어라면 실행을 중단하고 릴리스 안내를 확인하세요. 시스템 보안 기능 전체를 끄는 방식은 안내하지 않습니다.</p></div></details>
+        <details><summary>일정과 개인 데이터는 어디에 저장되나요?<span aria-hidden="true">+</span></summary><div class="faq-answer"><p>일정 원본은 macOS 캘린더(EventKit)가 관리합니다. 연결한 계정의 동기화 설정에 따라 원래 캘린더 서비스와 동기화될 수 있어요. 앱에서 일정을 저장하거나 날짜를 이동하면 원본 일정에도 반영됩니다.</p><p>프로젝트·메모·구독·보드 설정은 이 Mac의 로컬 파일에 저장되며 앱 자체의 기기 간 동기화는 제공하지 않습니다. 선택 기능인 날씨·환율 조회에는 일정, 메모, 구독 이름·금액을 보내지 않습니다.</p></div></details>
+        <details><summary>베타 버전에서 알아둘 점이 있나요?<span aria-hidden="true">+</span></summary><div class="faq-answer"><p>아직 초기 베타이므로 사용 환경에 따라 문제가 있을 수 있습니다. 모든 macOS 계정·권한 조합에서의 동작을 보증하지 않습니다. 중요한 일정이나 보드 데이터는 백업하고, 알려진 제한과 변경 사항은 <a href="https://github.com/ninejh/hannun-calendar/releases" data-release-link="notes">릴리스 노트</a>를 확인하세요.</p><p>문제를 발견하면 개인 일정이나 계정 정보가 포함되지 않도록 확인한 뒤 <a href="https://github.com/ninejh/hannun-calendar/issues" data-release-link="issues">GitHub Issues</a>에 남길 수 있습니다.</p></div></details>
+        <details><summary>무료인가요? 소스를 볼 수 있나요?<span aria-hidden="true">+</span></summary><div class="faq-answer"><p>Hannun Calendar는 MIT 라이선스의 무료 오픈소스 프로젝트입니다. <a href="https://github.com/ninejh/hannun-calendar" data-release-link="repository">GitHub에서 소스를 살펴보고</a> 직접 빌드하거나 기여할 수 있습니다. 날씨·환율 데이터의 이용 조건은 각 제공업체를 따릅니다.</p></div></details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer wrap"><a class="brand" href="#"><img src="assets/mark.svg" width="28" height="28" alt=""><span>Hannun Calendar</span></a><p>하루를 보는 조금 더 편안한 방법.</p><div><a href="https://github.com/ninejh/hannun-calendar" data-release-link="repository">GitHub <span aria-hidden="true">↗</span></a><a href="LICENSE.txt">MIT License</a><a href="#main">맨 위로 ↑</a></div></footer>
+</body>
+</html>

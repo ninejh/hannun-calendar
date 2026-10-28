@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>io.github.ninejh.hannuncalendar</string>
+    <key>CFBundleName</key><string>HannunCalendar</string>
+    <key>CFBundleDisplayName</key><string>Hannun Calendar</string>
+    <key>CFBundleExecutable</key><string>HannunCalendar</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>ko</string></array>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSUIElement</key><true/>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Hannun Calendar displays events from calendars connected to your Mac and syncs changes you explicitly save. Apple requires full access even to read existing events. This app has no feature for sending your events to an external server.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Display and edit events in your connected calendars.</string>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+</dict></plist>

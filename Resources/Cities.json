@@ -1,0 +1,373 @@
+[
+  {
+    "id": "seoul",
+    "nameEN": "Seoul",
+    "nameKO": "서울",
+    "timeZone": "Asia/Seoul",
+    "latitude": 37.5665,
+    "longitude": 126.978,
+    "aliases": []
+  },
+  {
+    "id": "tokyo",
+    "nameEN": "Tokyo",
+    "nameKO": "도쿄",
+    "timeZone": "Asia/Tokyo",
+    "latitude": 35.6762,
+    "longitude": 139.6503,
+    "aliases": []
+  },
+  {
+    "id": "new-york",
+    "nameEN": "New York",
+    "nameKO": "뉴욕",
+    "timeZone": "America/New_York",
+    "latitude": 40.7128,
+    "longitude": -74.006,
+    "aliases": [
+      "NYC",
+      "US/Eastern"
+    ]
+  },
+  {
+    "id": "los-angeles",
+    "nameEN": "Los Angeles",
+    "nameKO": "로스앤젤레스",
+    "timeZone": "America/Los_Angeles",
+    "latitude": 34.0522,
+    "longitude": -118.2437,
+    "aliases": [
+      "LA",
+      "US/Pacific"
+    ]
+  },
+  {
+    "id": "chicago",
+    "nameEN": "Chicago",
+    "nameKO": "시카고",
+    "timeZone": "America/Chicago",
+    "latitude": 41.8781,
+    "longitude": -87.6298,
+    "aliases": [
+      "US/Central"
+    ]
+  },
+  {
+    "id": "denver",
+    "nameEN": "Denver",
+    "nameKO": "덴버",
+    "timeZone": "America/Denver",
+    "latitude": 39.7392,
+    "longitude": -104.9903,
+    "aliases": [
+      "US/Mountain"
+    ]
+  },
+  {
+    "id": "london",
+    "nameEN": "London",
+    "nameKO": "런던",
+    "timeZone": "Europe/London",
+    "latitude": 51.5074,
+    "longitude": -0.1278,
+    "aliases": []
+  },
+  {
+    "id": "paris",
+    "nameEN": "Paris",
+    "nameKO": "파리",
+    "timeZone": "Europe/Paris",
+    "latitude": 48.8566,
+    "longitude": 2.3522,
+    "aliases": []
+  },
+  {
+    "id": "berlin",
+    "nameEN": "Berlin",
+    "nameKO": "베를린",
+    "timeZone": "Europe/Berlin",
+    "latitude": 52.52,
+    "longitude": 13.405,
+    "aliases": []
+  },
+  {
+    "id": "rome",
+    "nameEN": "Rome",
+    "nameKO": "로마",
+    "timeZone": "Europe/Rome",
+    "latitude": 41.9028,
+    "longitude": 12.4964,
+    "aliases": []
+  },
+  {
+    "id": "madrid",
+    "nameEN": "Madrid",
+    "nameKO": "마드리드",
+    "timeZone": "Europe/Madrid",
+    "latitude": 40.4168,
+    "longitude": -3.7038,
+    "aliases": []
+  },
+  {
+    "id": "zurich",
+    "nameEN": "Zurich",
+    "nameKO": "취리히",
+    "timeZone": "Europe/Zurich",
+    "latitude": 47.3769,
+    "longitude": 8.5417,
+    "aliases": []
+  },
+  {
+    "id": "helsinki",
+    "nameEN": "Helsinki",
+    "nameKO": "헬싱키",
+    "timeZone": "Europe/Helsinki",
+    "latitude": 60.1699,
+    "longitude": 24.9384,
+    "aliases": []
+  },
+  {
+    "id": "istanbul",
+    "nameEN": "Istanbul",
+    "nameKO": "이스탄불",
+    "timeZone": "Europe/Istanbul",
+    "latitude": 41.0082,
+    "longitude": 28.9784,
+    "aliases": []
+  },
+  {
+    "id": "dubai",
+    "nameEN": "Dubai",
+    "nameKO": "두바이",
+    "timeZone": "Asia/Dubai",
+    "latitude": 25.2048,
+    "longitude": 55.2708,
+    "aliases": []
+  },
+  {
+    "id": "kolkata",
+    "nameEN": "Kolkata",
+    "nameKO": "콜카타",
+    "timeZone": "Asia/Kolkata",
+    "latitude": 22.5726,
+    "longitude": 88.3639,
+    "aliases": [
+      "Asia/Calcutta"
+    ]
+  },
+  {
+    "id": "kathmandu",
+    "nameEN": "Kathmandu",
+    "nameKO": "카트만두",
+    "timeZone": "Asia/Kathmandu",
+    "latitude": 27.7172,
+    "longitude": 85.324,
+    "aliases": [
+      "Asia/Katmandu"
+    ]
+  },
+  {
+    "id": "singapore",
+    "nameEN": "Singapore",
+    "nameKO": "싱가포르",
+    "timeZone": "Asia/Singapore",
+    "latitude": 1.3521,
+    "longitude": 103.8198,
+    "aliases": []
+  },
+  {
+    "id": "hong-kong",
+    "nameEN": "Hong Kong",
+    "nameKO": "홍콩",
+    "timeZone": "Asia/Hong_Kong",
+    "latitude": 22.3193,
+    "longitude": 114.1694,
+    "aliases": []
+  },
+  {
+    "id": "shanghai",
+    "nameEN": "Shanghai",
+    "nameKO": "상하이",
+    "timeZone": "Asia/Shanghai",
+    "latitude": 31.2304,
+    "longitude": 121.4737,
+    "aliases": []
+  },
+  {
+    "id": "taipei",
+    "nameEN": "Taipei",
+    "nameKO": "타이베이",
+    "timeZone": "Asia/Taipei",
+    "latitude": 25.033,
+    "longitude": 121.5654,
+    "aliases": []
+  },
+  {
+    "id": "bangkok",
+    "nameEN": "Bangkok",
+    "nameKO": "방콕",
+    "timeZone": "Asia/Bangkok",
+    "latitude": 13.7563,
+    "longitude": 100.5018,
+    "aliases": []
+  },
+  {
+    "id": "jakarta",
+    "nameEN": "Jakarta",
+    "nameKO": "자카르타",
+    "timeZone": "Asia/Jakarta",
+    "latitude": -6.2088,
+    "longitude": 106.8456,
+    "aliases": []
+  },
+  {
+    "id": "sydney",
+    "nameEN": "Sydney",
+    "nameKO": "시드니",
+    "timeZone": "Australia/Sydney",
+    "latitude": -33.8688,
+    "longitude": 151.2093,
+    "aliases": []
+  },
+  {
+    "id": "adelaide",
+    "nameEN": "Adelaide",
+    "nameKO": "애들레이드",
+    "timeZone": "Australia/Adelaide",
+    "latitude": -34.9285,
+    "longitude": 138.6007,
+    "aliases": []
+  },
+  {
+    "id": "perth",
+    "nameEN": "Perth",
+    "nameKO": "퍼스",
+    "timeZone": "Australia/Perth",
+    "latitude": -31.9523,
+    "longitude": 115.8613,
+    "aliases": []
+  },
+  {
+    "id": "auckland",
+    "nameEN": "Auckland",
+    "nameKO": "오클랜드",
+    "timeZone": "Pacific/Auckland",
+    "latitude": -36.8485,
+    "longitude": 174.7633,
+    "aliases": []
+  },
+  {
+    "id": "honolulu",
+    "nameEN": "Honolulu",
+    "nameKO": "호놀룰루",
+    "timeZone": "Pacific/Honolulu",
+    "latitude": 21.3099,
+    "longitude": -157.8581,
+    "aliases": [
+      "US/Hawaii"
+    ]
+  },
+  {
+    "id": "anchorage",
+    "nameEN": "Anchorage",
+    "nameKO": "앵커리지",
+    "timeZone": "America/Anchorage",
+    "latitude": 61.2181,
+    "longitude": -149.9003,
+    "aliases": [
+      "US/Alaska"
+    ]
+  },
+  {
+    "id": "toronto",
+    "nameEN": "Toronto",
+    "nameKO": "토론토",
+    "timeZone": "America/Toronto",
+    "latitude": 43.6532,
+    "longitude": -79.3832,
+    "aliases": []
+  },
+  {
+    "id": "vancouver",
+    "nameEN": "Vancouver",
+    "nameKO": "밴쿠버",
+    "timeZone": "America/Vancouver",
+    "latitude": 49.2827,
+    "longitude": -123.1207,
+    "aliases": []
+  },
+  {
+    "id": "mexico-city",
+    "nameEN": "Mexico City",
+    "nameKO": "멕시코시티",
+    "timeZone": "America/Mexico_City",
+    "latitude": 19.4326,
+    "longitude": -99.1332,
+    "aliases": []
+  },
+  {
+    "id": "sao-paulo",
+    "nameEN": "São Paulo",
+    "nameKO": "상파울루",
+    "timeZone": "America/Sao_Paulo",
+    "latitude": -23.5505,
+    "longitude": -46.6333,
+    "aliases": []
+  },
+  {
+    "id": "buenos-aires",
+    "nameEN": "Buenos Aires",
+    "nameKO": "부에노스아이레스",
+    "timeZone": "America/Argentina/Buenos_Aires",
+    "latitude": -34.6037,
+    "longitude": -58.3816,
+    "aliases": [
+      "America/Buenos_Aires"
+    ]
+  },
+  {
+    "id": "santiago",
+    "nameEN": "Santiago",
+    "nameKO": "산티아고",
+    "timeZone": "America/Santiago",
+    "latitude": -33.4489,
+    "longitude": -70.6693,
+    "aliases": []
+  },
+  {
+    "id": "johannesburg",
+    "nameEN": "Johannesburg",
+    "nameKO": "요하네스버그",
+    "timeZone": "Africa/Johannesburg",
+    "latitude": -26.2041,
+    "longitude": 28.0473,
+    "aliases": []
+  },
+  {
+    "id": "cairo",
+    "nameEN": "Cairo",
+    "nameKO": "카이로",
+    "timeZone": "Africa/Cairo",
+    "latitude": 30.0444,
+    "longitude": 31.2357,
+    "aliases": []
+  },
+  {
+    "id": "nairobi",
+    "nameEN": "Nairobi",
+    "nameKO": "나이로비",
+    "timeZone": "Africa/Nairobi",
+    "latitude": -1.2921,
+    "longitude": 36.8219,
+    "aliases": []
+  },
+  {
+    "id": "lagos",
+    "nameEN": "Lagos",
+    "nameKO": "라고스",
+    "timeZone": "Africa/Lagos",
+    "latitude": 6.5244,
+    "longitude": 3.3792,
+    "aliases": []
+  }
+]
