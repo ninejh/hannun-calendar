@@ -8,11 +8,11 @@ Move and resize the calendar and four configurable panels on a free grid. Hold a
 
 ## Beta download
 
-The prepared release is **v1.0.0-beta.4**, for Apple Silicon and macOS 14 or later. The app and DMG are **Developer ID signed, Apple notarized and stapled**. The ZIP contains the same stapled app. Strict signature, ticket and Gatekeeper checks passed for these exact artifacts. Bundle version **1.0**, build **1** remain unchanged.
+The prepared release is **v1.0.0-beta.5**, for Apple Silicon and macOS 14 or later. The app and DMG are **Developer ID signed, Apple notarized and stapled**. The ZIP contains the same stapled app. Strict signature, ticket and Gatekeeper checks passed for these exact artifacts. Bundle version **1.0**, build **1** remain unchanged.
 
-[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/SHA256SUMS)
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/SHA256SUMS)
 
-This candidate distinguishes an unconnected calendar from an actual failure. It avoids treating initial navigation as permission denial and keeps connection explicit. Permission-denied, restricted, temporarily unavailable and genuine storage errors remain distinct. Synthetic tests do not establish resolution of the reported issue on a real account. Real EventKit connectivity, clean-account first launch, physical keyboard/VoiceOver, installation and user-data upgrades remain unverified. See [INSTALL.md](INSTALL.md).
+Storage protection and write failures use specific messages when the previous message was generic. Storage protection, save outcomes, retry and recovery behavior are preserved. This does not establish the cause or resolution of any previously reported real-account error. Real EventKit connectivity, clean-account first launch, physical keyboard/VoiceOver, installation and user-data upgrades remain unverified. See [INSTALL.md](INSTALL.md).
 
 ## Build from source
 

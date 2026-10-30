@@ -272,15 +272,24 @@ enum NativeOperation: Hashable, Sendable {
 
 enum NativeRuntimeErrors {
     static func normalize(_ error: Error) -> AppFailure {
-        if let value = error as? AppFailure { return value }
+        if var value = error as? AppFailure {
+            if value.messageKey == "error.generic" {
+                switch value.code {
+                case .storageProtected: value.messageKey = "error.storage_protected"
+                case .storageWriteFailed: value.messageKey = "error.storage_write_failed"
+                default: break
+                }
+            }
+            return value
+        }
         if let value = error as? NativeFailure {
-            return AppFailure(code: AppFailureCode(rawValue: value.code) ?? .invalidRequest,
+            return normalize(AppFailure(code: AppFailureCode(rawValue: value.code) ?? .invalidRequest,
                               messageKey: value.messageKey ?? "error." + value.code.lowercased(), retryable: value.retryable,
-                              committed: value.committed == .yes ? .yes : value.committed == .unknown ? .unknown : .no)
+                              committed: value.committed == .yes ? .yes : value.committed == .unknown ? .unknown : .no))
         }
         if let value = error as? BoardStorageError {
-            return AppFailure(code: value.code == .unsupportedVersion ? .storageProtected : AppFailureCode(rawValue: value.code.rawValue) ?? .validationFailed,
-                              committed: value.committed ? .yes : .no)
+            return normalize(AppFailure(code: value.code == .unsupportedVersion ? .storageProtected : AppFailureCode(rawValue: value.code.rawValue) ?? .validationFailed,
+                              committed: value.committed ? .yes : .no))
         }
         if let value = error as? PanelDomainError {
             return AppFailure(code: AppFailureCode(rawValue: value.code.rawValue) ?? .validationFailed)

@@ -8,11 +8,11 @@ Mac 바탕화면에서 일정과 프로젝트, 메모, 구독, 할 일, 습관, 
 
 ## 베타 다운로드
 
-Apple Silicon과 macOS 14 이상용 준비된 릴리스는 **v1.0.0-beta.4**입니다. 앱과 DMG의 **Developer ID 서명·Apple 공증·티켓 첨부**를 완료했습니다. ZIP에도 같은 티켓 첨부 앱이 들어 있으며 이 정확한 파일의 서명·티켓·Gatekeeper 검사를 통과했습니다. 번들 버전 **1.0**, 빌드 **1**은 그대로입니다.
+Apple Silicon과 macOS 14 이상용 준비된 릴리스는 **v1.0.0-beta.5**입니다. 앱과 DMG의 **Developer ID 서명·Apple 공증·티켓 첨부**를 완료했습니다. ZIP에도 같은 티켓 첨부 앱이 들어 있으며 이 정확한 파일의 서명·티켓·Gatekeeper 검사를 통과했습니다. 번들 버전 **1.0**, 빌드 **1**은 그대로입니다.
 
-[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/SHA256SUMS)
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/SHA256SUMS)
 
-최초 미연결 상태와 실제 오류를 구분하고, 연결 전 탐색을 권한 거부 오류로 취급하지 않으며 명시적인 연결 동작을 유지합니다. 권한 거부·제한·일시 불가와 실제 저장 오류는 구분해 유지합니다. 합성 테스트만으로 실제 계정에서 보고된 문제가 해결됐다고 주장하지 않습니다. 실제 EventKit 연결, 깨끗한 계정 첫 실행, 물리 키보드·VoiceOver, 설치·사용자 데이터 업그레이드는 미검증입니다. [INSTALL.md](INSTALL.md)를 확인하세요.
+저장 보호·쓰기 실패의 기본 오류 문구를 구체적으로 표시합니다. 저장 보호와 저장 결과·재시도·복구 동작은 유지합니다. 이 변경으로 이전 실제 계정 오류의 원인이나 해결을 증명하지 않습니다. 실제 EventKit 연결, 깨끗한 계정 첫 실행, 물리 키보드·VoiceOver, 설치·사용자 데이터 업그레이드는 미검증입니다. [INSTALL.md](INSTALL.md)를 확인하세요.
 
 ## 소스 빌드
 

@@ -119,7 +119,7 @@
     "error.stale_conflict": "This event was modified elsewhere. Please refresh to see the latest version.",
     "error.empty_name": "Please enter at least one character for the name.",
     "error.storage_save": "Could not save board settings. Please check disk space.",
-    "error.storage_protected": "Board storage is in protected mode. Changes are kept in memory only.",
+    "error.storage_protected": "Board storage is protected. Changes cannot be saved.",
     "error.partial_eventkit": "Event saved to calendar, but failed to save project link and pin.",
     "error.retry_action": "Retry",
     "error.mutation_generic": "Could not update event. Please try again.",
