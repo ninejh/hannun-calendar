@@ -43,6 +43,10 @@ import AppKit
         return focus.projectID.map { id in focus.todayByProject.first(where: { $0.projectID == id })?.seconds ?? 0 } ?? focus.unassignedTodaySeconds
     }
     private var active: Bool { let status = context.presentation.state.snapshot.focus.status; return status == .running || status == .paused }
+    private func clearPartialNotice(_ top: CGFloat, height: CGFloat, viewportHeight: CGFloat) -> CGFloat {
+        guard top < viewportHeight, top + height > viewportHeight else { return top }
+        return viewportHeight + NativeSpace.xs
+    }
     init(context: BoardScreenContext, accessibilityNotifications: any NativeAccessibilityNotifications = SystemNativeAccessibilityNotifications()) {
         self.context = context
         surface = ClockFocusPanelSurface(focus: context.focus); content = ClockFocusCanvas(focus: context.focus, accessibilityNotifications: accessibilityNotifications)
@@ -218,11 +222,13 @@ import AppKit
             if pulseView.superview !== content { pulseView.removeFromSuperview(); content.addSubview(pulseView) }
             if dialCanvas.superview !== content { dialCanvas.removeFromSuperview(); content.addSubview(dialCanvas, positioned: .below, relativeTo: pulseView) }
             surface.setAccessibilityLabel(context.text("timer.title"))
-            var title = NativeRenderItem(id: "focusTimer.title", rect: CGRect(x: inset, y: inset, width: width, height: row), label: context.text("timer.title"), kind: .text)
-            if let slot { title = NativePanelHeader.decorate(title, geometry: PanelHeaderGeometry(slot: slot, titleRect: title.rect,
-                headerRect: CGRect(x: 0, y: 0, width: surface.bounds.width, height: inset + row + gap), excludedRects: [])) }
+            let titleX = max(inset, placement?.editLeading ?? 0)
+            var title = NativeRenderItem(id: "focusTimer.title", rect: CGRect(x: titleX, y: inset, width: max(0, inset + width - titleX), height: row), label: context.text("timer.title"), kind: .text)
+            if let slot, placement?.editExclusions.isEmpty == false { title = NativePanelHeader.decorate(title, geometry: PanelHeaderGeometry(slot: slot, titleRect: title.rect,
+                headerRect: CGRect(x: 0, y: 0, width: surface.bounds.width, height: inset + row + gap), excludedRects: placement?.editExclusions ?? [], actionLabel: context.text("slot_menu.title"))) }
             surface.update(items: [title])
-            viewport.frame = CGRect(x: inset, y: inset + row + gap, width: width, height: max(0, surface.bounds.height - inset * 2 - row - gap))
+            let top = inset + row + gap
+            viewport.frame = CGRect(x: inset, y: top, width: width, height: max(0, surface.bounds.height - top - max(inset, placement?.editBottom ?? 0)))
         }
         let wide = variant == .wide && width >= NativeSize.projectMinWidth * 2
         let seconds = remainingSeconds, time = String(format: "%02d:%02d", seconds / 60, seconds % 60)
@@ -267,7 +273,10 @@ import AppKit
         var notificationItem = NativeRenderItem(id: "focusTimer.notify", rect: CGRect(x: footerX, y: footerY, width: footerWidth, height: row), label: context.text("timer.notify_finish"), kind: .checkBox, checked: settings.notifyOnFinish)
         notificationItem.enabled = true; items.append(notificationItem); footerY += row
         var bottom = max(footerY, durationY + row * 2)
-        if active { add("focusTimer.locked", context.text("timer.locked_running"), CGRect(x: 0, y: bottom, width: width, height: row * 2), color: .textQuiet); bottom += row * 2 }
+        if active {
+            bottom = clearPartialNotice(bottom, height: row * 2, viewportHeight: viewport.contentSize.height)
+            add("focusTimer.locked", context.text("timer.locked_running"), CGRect(x: 0, y: bottom, width: width, height: row * 2), color: .textQuiet); bottom += row * 2
+        }
         if focus.status == .completed {
             add("focusTimer.completion", context.text(focus.mode == .focus ? "timer.session_done" : "timer.break_done"), CGRect(x: 0, y: bottom, width: width, height: row * 2), color: .success); bottom += row * 2
         }
@@ -308,6 +317,8 @@ import AppKit
         let metrics = NativePanelStepMetrics(panel: panelID, shape: placement.shape, step: placement.heightStep)
         let row = metrics.settingsRow!.height, gap = metrics.itemGap, tinyRail = placement.shape == .rail && placement.heightStep == .tiny
         let primaryHeight = tinyRail ? row : NativeSize.toolbarHeight + NativeSpace.xxs
+        let viewportTop = max(metrics.headerHeight, placement.editLeading > 0 ? 32 : 0) + primaryHeight + gap
+        let visibleHeight = max(0, surface.bounds.height - viewportTop - max(metrics.bottomPadding, placement.editBottom))
         let width = max(0, surface.bounds.width - metrics.horizontalPadding * 2)
         let font = metrics.numericFont
         let seconds = remainingSeconds, time = String(format: "%02d:%02d", seconds / 60, seconds % 60)
@@ -358,6 +369,7 @@ import AppKit
         } else {
             projectRect = CGRect(x: 0, y: y, width: width, height: row)
             add("focusTimer.project", projectName, projectRect, kind: .button, enabled: !active, fill: .raised); y += row + gap
+            y = clearPartialNotice(y, height: row, viewportHeight: visibleHeight)
             for (index, mode) in [FocusMode.focus, .break].enumerated() {
                 let selected = focus.mode == mode
                 add("focusTimer.mode.\(mode.rawValue)", context.text(mode == .focus ? "timer.mode_focus" : "timer.mode_break", values: ["0": String((mode == .focus ? settings.focusSeconds : settings.breakSeconds) / 60)]),
@@ -378,20 +390,23 @@ import AppKit
         y += row * 2 + gap
         add("focusTimer.today", context.text("timer.today_focus", values: ["0": String(todaySeconds / 60)]), CGRect(x: 0, y: y, width: width, height: row), color: .textSecondary); y += row
         items.append(NativeRenderItem(id: "focusTimer.notify", rect: CGRect(x: 0, y: y, width: width, height: row), label: context.text("timer.notify_finish"), kind: .checkBox, checked: settings.notifyOnFinish)); y += row
-        if active { add("focusTimer.locked", context.text("timer.locked_running"), CGRect(x: 0, y: y, width: width, height: row), color: .textQuiet); y += row }
+        if active {
+            y = clearPartialNotice(y, height: row, viewportHeight: visibleHeight)
+            add("focusTimer.locked", context.text("timer.locked_running"), CGRect(x: 0, y: y, width: width, height: row), color: .textQuiet); y += row
+        }
         if focus.status == .completed { add("focusTimer.completion", context.text(focus.mode == .focus ? "timer.session_done" : "timer.break_done"), CGRect(x: 0, y: y, width: width, height: row), color: .success); y += row }
         if state.activity.loading { add("focusTimer.loading", context.text("loading.label"), CGRect(x: 0, y: y, width: width, height: row), color: .textQuiet); y += row }
         let dirty = fixed.filter { !fixedContent.items.contains($0) }.map(\.id) + items.filter { !content.items.contains($0) }.map(\.id)
         if tick { lastTickDirtyIDs = dirty }
         if !tick {
             fixedContent.isHidden = false
-            var title = NativeRenderItem(id: "focusTimer.title", rect: CGRect(x: metrics.horizontalPadding, y: 0, width: width, height: metrics.headerHeight), label: context.text("timer.title"), kind: .text)
-            if let slot { title = NativePanelHeader.decorate(title, geometry: PanelHeaderGeometry(slot: slot, titleRect: title.rect,
-                headerRect: CGRect(x: 0, y: 0, width: surface.bounds.width, height: metrics.headerHeight), excludedRects: [])) }
+            let titleX = max(metrics.horizontalPadding, placement.editLeading)
+            var title = NativeRenderItem(id: "focusTimer.title", rect: CGRect(x: titleX, y: 0, width: max(0, metrics.horizontalPadding + width - titleX), height: metrics.headerHeight), label: context.text("timer.title"), kind: .text)
+            if let slot, !placement.editExclusions.isEmpty { title = NativePanelHeader.decorate(title, geometry: PanelHeaderGeometry(slot: slot, titleRect: title.rect,
+                headerRect: CGRect(x: 0, y: 0, width: surface.bounds.width, height: metrics.headerHeight), excludedRects: placement.editExclusions, actionLabel: context.text("slot_menu.title"))) }
             surface.update(items: [title]); surface.setAccessibilityLabel(title.label)
-            fixedContent.frame = CGRect(x: metrics.horizontalPadding, y: metrics.headerHeight, width: width, height: primaryHeight)
-            let top = fixedContent.frame.maxY + gap
-            viewport.frame = CGRect(x: metrics.horizontalPadding, y: top, width: width, height: max(0, surface.bounds.height - top - metrics.bottomPadding))
+            fixedContent.frame = CGRect(x: metrics.horizontalPadding, y: max(metrics.headerHeight, placement.editLeading > 0 ? 32 : 0), width: width, height: primaryHeight)
+            viewport.frame = CGRect(x: metrics.horizontalPadding, y: viewportTop, width: width, height: visibleHeight)
             content.frame = CGRect(x: 0, y: 0, width: width, height: max(viewport.contentSize.height, y + NativeSize.focusWidth / 2))
             if dialCanvas.superview !== fixedContent { dialCanvas.removeFromSuperview(); fixedContent.addSubview(dialCanvas) }
             dialCanvas.frame = timeRect; dialCanvas.fonts = ["focusTimer.time": font]

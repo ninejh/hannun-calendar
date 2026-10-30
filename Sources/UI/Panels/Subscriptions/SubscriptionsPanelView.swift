@@ -33,7 +33,13 @@ import AppKit
         (unitLabel as NSString).size(withAttributes: NativeFont.attributes(font: NativeFont.primary, color: .labelColor)).width + NativeSpace.lg
     }
     private var unitInContent: Bool { totalWidth + unitWidth > bounds.width - horizontalPadding * 2 }
-    private var totalOnSecondRow: Bool { totalWidth + unitWidth + NativeSize.compactTarget * 3 > bounds.width - horizontalPadding * 2 }
+    private var totalOnSecondRow: Bool {
+        let available = bounds.width - horizontalPadding * 2
+        if totalWidth + unitWidth + NativeSize.compactTarget * 3 > available { return true }
+        guard let placement, placement.editLeading > horizontalPadding else { return false }
+        let titleWidth = ceil((context.text("sub.title") as NSString).size(withAttributes: [.font: NativeFont.sectionHead]).width) + NativeSpace.sm * 2
+        return available - totalWidth - unitWidth - NativeSize.compactTarget - (placement.editLeading - horizontalPadding) < titleWidth
+    }
     private var totalRowHeight: CGFloat { totalOnSecondRow ? NativeSize.compactTarget : 0 }
     private var partialHeight: CGFloat {
         partialMessage.isEmpty ? 0 : isCompactStep ? EditingPanelCanvas.wrappedHeight(partialMessage, width: bounds.width - horizontalPadding * 2) : NativeSize.toolbarHeight * 2
@@ -42,7 +48,7 @@ import AppKit
         rateFooter.isEmpty ? 0 : EditingPanelCanvas.wrappedHeight(rateFooter, width: bounds.width - horizontalPadding * 2)
     }
     private var scrollsSupplement: Bool {
-        stepMetrics.step == .tiny || headerRowHeight + totalRowHeight + partialHeight + rateFooterHeight +
+        (placement?.editBottom ?? 0) > 0 || stepMetrics.step == .tiny || headerRowHeight + totalRowHeight + partialHeight + rateFooterHeight +
             (statusMessage.isEmpty ? 0 : NativeSize.compactTarget) + (stepMetrics.listRow?.height ?? NativeSize.toolbarHeight) + NativeSpace.xs > bounds.height
     }
     override var scrollsStatus: Bool { super.scrollsStatus || scrollsSupplement }
@@ -144,7 +150,8 @@ import AppKit
             let priceWidth = (money as NSString).size(withAttributes: [.font: NativeFont.eventTime]).width + NativeSpace.lg
             let badgeWidth = (badge as NSString).size(withAttributes: [.font: NativeFont.badge]).width + NativeSpace.lg
             let available = scroll.contentSize.width
-            let stacked = priceWidth + badgeWidth + NativeSize.compactTarget * 2 > available
+            let nameWidthNeeded = ceil((value.name as NSString).size(withAttributes: NativeFont.attributes(font: NativeFont.primary, color: .labelColor)).width) + NativeSpace.lg
+            let stacked = priceWidth + badgeWidth + NativeSize.compactTarget + nameWidthNeeded > available
             let separateCycle = priceWidth > available
             let height = rowHeight * CGFloat(stacked ? (separateCycle ? 3 : 2) : 1)
             let nameWidth = max(0, available - (stacked ? 0 : priceWidth) - badgeWidth - NativeSize.compactTarget)
@@ -175,6 +182,8 @@ import AppKit
         }
         if scrollsSupplement, !partialMessage.isEmpty {
             let height = EditingPanelCanvas.wrappedHeight(partialMessage, width: scroll.contentSize.width)
+            let visibleHeight = scroll.contentSize.height
+            if y < visibleHeight, y + height > visibleHeight { y = visibleHeight + NativeSpace.xs }
             items.append(NativeRenderItem(id: "subscriptions.partial", rect: CGRect(x: 0, y: y, width: scroll.contentSize.width, height: height), label: partialMessage, kind: .text, color: .textQuiet))
             contentCanvas.wrappedText["subscriptions.partial"] = partialMessage; y += height
         }
@@ -189,7 +198,7 @@ import AppKit
         contentCanvas.update(items: items)
     }
     static func money(_ amount: String, currency: String, locale: String) -> String {
-        let formatter = NumberFormatter(); formatter.locale = Locale(identifier: locale); formatter.numberStyle = .currency
+        let formatter = NumberFormatter(); formatter.locale = Locale(identifier: locale); formatter.numberStyle = currency == "KRW" ? .currency : .decimal
         formatter.roundingMode = .halfUp
         formatter.currencyCode = currency; formatter.minimumFractionDigits = PanelCurrency.minorUnits[currency] ?? 2; formatter.maximumFractionDigits = formatter.minimumFractionDigits
         let value = NSDecimalNumber(string: amount, locale: Locale(identifier: "en_US_POSIX"))

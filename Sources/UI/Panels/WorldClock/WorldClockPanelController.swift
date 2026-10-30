@@ -205,11 +205,14 @@ import AppKit
             let addHeight = compact ? NativeSize.compactTarget : headerHeight
             let actualHeader = compact ? max(titleHeight, addHeight) : inset + headerHeight + NativeSpace.sm
             let addRect = CGRect(x: inset + width - addWidth, y: headerY, width: addWidth, height: addHeight)
-            var title = NativeRenderItem(id: "worldClock.title", rect: CGRect(x: inset, y: headerY, width: max(0, width - addWidth - NativeSpace.sm), height: titleHeight), label: context.text("world_clock.title"), kind: .text)
-            if let slot { title = NativePanelHeader.decorate(title, geometry: PanelHeaderGeometry(slot: slot, titleRect: title.rect,
-                headerRect: CGRect(x: 0, y: 0, width: surface.bounds.width, height: actualHeader), excludedRects: [addRect])) }
+            let titleX = max(inset, placement?.editLeading ?? 0)
+            var title = NativeRenderItem(id: "worldClock.title", rect: CGRect(x: titleX, y: headerY, width: max(0, inset + width - addWidth - NativeSpace.sm - titleX), height: titleHeight), label: context.text("world_clock.title"), kind: .text)
+            if let slot, placement?.editExclusions.isEmpty == false { title = NativePanelHeader.decorate(title, geometry: PanelHeaderGeometry(slot: slot, titleRect: title.rect,
+                headerRect: CGRect(x: 0, y: 0, width: surface.bounds.width, height: actualHeader), excludedRects: [addRect] + (placement?.editExclusions ?? []), actionLabel: context.text("slot_menu.title"))) }
             surface.update(items: [title, NativeRenderItem(id: "worldClock.add", rect: addRect, label: addLabel, kind: .button)])
-            viewport.frame = CGRect(x: inset, y: actualHeader, width: width, height: max(0, surface.bounds.height - actualHeader - (compact ? metrics!.bottomPadding : inset)))
+            let top = max(actualHeader, (placement?.editLeading ?? 0) > 0 ? 32 : 0)
+            let bottom = max(placement?.editBottom ?? 0, compact ? metrics!.bottomPadding : inset)
+            viewport.frame = CGRect(x: inset, y: top, width: width, height: max(0, surface.bounds.height - top - bottom))
         }
         var items: [NativeRenderItem] = []; var y: CGFloat = 0
         content.fonts.removeAll(keepingCapacity: true); content.visibleLabels.removeAll(keepingCapacity: true); content.dayNight.removeAll(keepingCapacity: true)

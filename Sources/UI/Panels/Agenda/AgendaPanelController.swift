@@ -44,6 +44,9 @@ struct AgendaProjection: Equatable {
     private var variant: SlotVariant = .tall
     private var heightStep: PanelSizeStep = .regular
     private var slot: SlotID?
+    private var editLeading: CGFloat = 0
+    private var editBottom: CGFloat = 0
+    private var editExclusions: [CGRect] = []
     private var lastMinute: Int64 = -1
     private var disposed = false
     private var parked = false
@@ -81,6 +84,7 @@ struct AgendaProjection: Equatable {
     }
     func setPlacement(_ placement: PanelPlacement) {
         heightStep = placement.heightStep
+        editLeading = placement.editLeading; editBottom = placement.editBottom; editExclusions = placement.editExclusions
         variant = placement.shape == .wide ? .wide : .tall
         setPlacement(slot: placement.slot, variant: variant)
     }
@@ -130,7 +134,8 @@ struct AgendaProjection: Equatable {
         let controlHeight: CGFloat = useSelectedHeader ? 44 : min(NativeSize.compactTarget, baseHeader)
         let addWidth: CGFloat = readOnly ? 0 : controlHeight
         let headerTop = heightStep == .tiny ? 0 : NativeSpace.xs
-        let titleWidth = max(0, useSelectedHeader ? contentWidth : contentWidth - addWidth - NativeSpace.sm)
+        let titleX = max(inset, editLeading)
+        let titleWidth = max(0, (useSelectedHeader ? contentWidth : contentWidth - addWidth - NativeSpace.sm) - (titleX - inset))
         let dateFormatter = DateFormatter(); dateFormatter.locale = dayFormatter.locale; dateFormatter.calendar = dayFormatter.calendar; dateFormatter.timeZone = zone
         dateFormatter.setLocalizedDateFormatFromTemplate(projection.day.year == state.snapshot.clock.today.year ? "EEEE MMMM d" : "y EEEE MMMM d")
         let heading = selected ? dateFormatter.string(from: projection.day.date(in: zone)) : context.text("today.title")
@@ -142,17 +147,18 @@ struct AgendaProjection: Equatable {
         let canReserve = headerTop + reserved + controlHeight + NativeSize.compactTarget + NativeSpace.sm <= height
         let titleHeight = useSelectedHeader ? (canReserve ? max(measured, reserved) : measured) : controlHeight
         let header = useSelectedHeader ? headerTop + titleHeight + controlHeight : baseHeader
-        let titleRect = CGRect(x: inset, y: headerTop, width: titleWidth, height: titleHeight)
+        let titleRect = CGRect(x: titleX, y: headerTop, width: titleWidth, height: titleHeight)
         var items = [NativeRenderItem(id: prefix + "title", rect: titleRect, label: heading, kind: .text)]
         let count = context.text(projection.rows.count == 1 ? "calendar.events.one" : "calendar.events.other", values: ["0": String(projection.rows.count)])
         let meta = dayFormatter.string(from: projection.day.date(in: zone)) + " · " + count
         if !compact && !useSelectedHeader {
-            items.append(NativeRenderItem(id: prefix + "date", rect: CGRect(x: inset, y: header - NativeSpace.lg, width: contentWidth, height: NativeSpace.lg), label: meta, kind: .text, color: .textSecondary))
+            items.append(NativeRenderItem(id: prefix + "date", rect: CGRect(x: header - NativeSpace.lg < 32 ? titleX : inset, y: header - NativeSpace.lg, width: header - NativeSpace.lg < 32 ? max(0, width - inset - titleX) : contentWidth, height: NativeSpace.lg), label: meta, kind: .text, color: .textSecondary))
         } else { items[0].value = useSelectedHeader ? count : meta }
         if useSelectedHeader {
-            items.append(NativeRenderItem(id: "agenda-back-today", rect: CGRect(x: inset, y: headerTop + titleHeight, width: backWidth, height: controlHeight), label: backLabel, kind: .button, value: backLabel, color: .accentBlue, minimumTarget: 44))
+            let backX = headerTop + titleHeight < 32 ? titleX : inset
+            items.append(NativeRenderItem(id: "agenda-back-today", rect: CGRect(x: backX, y: headerTop + titleHeight, width: backWidth, height: controlHeight), label: backLabel, kind: .button, value: backLabel, color: .accentBlue, minimumTarget: 44))
             let countWidth = ceil((count as NSString).size(withAttributes: [.font: NativeFont.badge]).width)
-            let countX = inset + backWidth + NativeSpace.sm
+            let countX = backX + backWidth + NativeSpace.sm
             if countX + countWidth + NativeSpace.sm <= width - inset - addWidth {
                 items.append(NativeRenderItem(id: prefix + "date", rect: CGRect(x: countX, y: headerTop + titleHeight + (controlHeight - NativeSpace.lg) / 2, width: countWidth, height: NativeSpace.lg), label: count, kind: .text, color: .textSecondary))
             }
@@ -160,29 +166,34 @@ struct AgendaProjection: Equatable {
         if !readOnly {
             items.append(NativeRenderItem(id: "agenda-add", rect: CGRect(x: width - inset - addWidth, y: useSelectedHeader ? headerTop + titleHeight : headerTop, width: addWidth, height: controlHeight), label: context.text("toolbar.new_event"), kind: .button, minimumTarget: controlHeight))
         }
-        if let slot, !readOnly {
+        if let slot, !readOnly, !editExclusions.isEmpty {
             items[0] = NativePanelHeader.decorate(items[0], geometry: PanelHeaderGeometry(slot: slot, titleRect: titleRect,
                 headerRect: metrics.regions(in: surface.bounds, headerHeight: header).headerRect,
-                excludedRects: items.filter { $0.id == "agenda-add" || $0.id == "agenda-back-today" }.map(\.hitRect)))
+                excludedRects: items.filter { $0.id == "agenda-add" || $0.id == "agenda-back-today" }.map(\.hitRect) + editExclusions, actionLabel: context.text("slot_menu.title")))
         }
-        let summaryInScroll = useSelectedHeader && !wide && heightStep == .tiny
+        let showNext = fixedDay == nil && (projection.next != nil || !projection.rows.isEmpty)
+        let summaryInScroll = showNext && useSelectedHeader && !wide && heightStep == .tiny
         var scrolledSummary: NativeRenderItem?
-        if fixedDay == nil {
+        if showNext {
             let next = projection.next
             let title = next.map { context.text(selected ? "today.next_today_label" : "today.next_label", values: ["0": $0.item.title]) } ?? context.text("today.clear")
             let remaining = next.map { max(0, Int(ceil($0.item.start.timeIntervalSince(state.snapshot.clock.now.date) / 60))) } ?? 0
             let time = next.map { remaining < 60 ? context.text("today.in_minutes", values: ["0": String(remaining)]) : context.text("today.at_time", values: ["0": timeFormatter.string(from: $0.item.start)]) } ?? ""
-            let summary = NativeRenderItem(id: "agenda-next", rect: CGRect(x: inset, y: summaryInScroll ? 0 : header + NativeSpace.xs, width: summaryWidth - (wide ? NativeSpace.md : 0), height: nextHeight), label: title, kind: .badge, value: time, fill: .raised, radius: NativeRadius.input)
+            let summaryX = !summaryInScroll && header + NativeSpace.xs < 32 ? titleX : inset
+            let summary = NativeRenderItem(id: "agenda-next", rect: CGRect(x: summaryX, y: summaryInScroll ? 0 : header + NativeSpace.xs, width: max(0, summaryWidth - (wide ? NativeSpace.md : 0) - (summaryX - inset)), height: nextHeight), label: title, kind: .badge, value: time, fill: .raised, radius: NativeRadius.input)
             if summaryInScroll { scrolledSummary = summary } else { items.append(summary) }
         }
-        let listY = fixedDay != nil || wide || summaryInScroll ? header + NativeSpace.xs : header + nextHeight + NativeSpace.sm
+        let listY = max(editLeading, !showNext || wide || summaryInScroll ? header + NativeSpace.xs : header + nextHeight + NativeSpace.sm)
         let listX = wide ? inset + summaryWidth : 0
         let rowMetrics = metrics.listRow!
         let rowHeight = rowMetrics.height, rowGap = rowMetrics.gap
-        let availableHeight = max(0, height - listY - (heightStep == .small ? metrics.bottomPadding : NativeSpace.sm))
+        let normalBottom = heightStep == .small ? metrics.bottomPadding : NativeSpace.sm
+        let narrowForHandle = editBottom > 0 && height - listY - max(editBottom, normalBottom) < NativeSize.compactTarget
+        let availableHeight = max(0, height - listY - (narrowForHandle ? normalBottom : max(editBottom, normalBottom)))
         let rowLimit = heightStep == .tiny ? 1 : heightStep == .small ? (wide ? 2 : 3) : Int.max
-        let viewportHeight = rowLimit == Int.max ? availableHeight : min(availableHeight, CGFloat(rowLimit) * rowHeight + CGFloat(rowLimit - 1) * rowGap)
-        scroll.frame = CGRect(x: listX, y: listY, width: max(0, width - listX), height: viewportHeight)
+        let rowBudget = CGFloat(rowLimit == Int.max ? 0 : rowLimit) * rowHeight + CGFloat(rowLimit == Int.max ? 0 : rowLimit - 1) * rowGap
+        let viewportHeight = rowLimit == Int.max ? availableHeight : min(availableHeight, editBottom > 0 ? max(NativeSize.compactTarget, rowBudget) : rowBudget)
+        scroll.frame = CGRect(x: listX, y: listY, width: max(0, width - listX - (narrowForHandle ? editBottom : 0)), height: viewportHeight)
         let columns = wide ? 2 : 1
         let documentWidth = scroll.contentSize.width
         let available = max(0, documentWidth - inset * 2 - (columns == 2 ? NativeSpace.md : 0))
@@ -291,6 +302,7 @@ struct AgendaProjection: Equatable {
 }
 @MainActor final class AgendaPanelView: PanelContainerView {
     var onLayout: (@MainActor () -> Void)?
+    override func panelHeaderTitleMetrics(_ item: NativeRenderItem) -> (font: NSFont, leading: CGFloat) { (NativeFont.sectionHead, 0) }
     override func layout() { super.layout(); onLayout?() }
     override func paint(_ item: NativeRenderItem) {
         if item.panelHeader != nil { var feedback = item; feedback.label = ""; super.paint(feedback) }

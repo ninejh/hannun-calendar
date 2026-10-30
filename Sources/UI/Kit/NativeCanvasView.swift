@@ -59,7 +59,11 @@ final class NativeAXElement: NSAccessibilityElement {
             canvas.activate(id); return true
         }
         focused = { [weak canvas] in guard let canvas, let item = canvas.items.first(where: { $0.id == id }) else { return false }; return canvas.focus.focusedID == item.focusID }
-        setFocus = { [weak canvas] value in guard value, let canvas else { return }; canvas.window?.makeFirstResponder(canvas); if let item = canvas.items.first(where: { $0.id == id }) { canvas.focus.focus(item.focusID) }; canvas.needsDisplay = true }
+        setFocus = { [weak canvas] value in
+            guard value, let canvas, let item = canvas.items.first(where: { $0.id == id }) else { return }
+            if item.panelHeader != nil, (canvas.window?.firstResponder as? NSTextView)?.hasMarkedText() == true { return }
+            canvas.window?.makeFirstResponder(canvas); canvas.focus.focus(item.focusID); canvas.needsDisplay = true
+        }
         adjustValue = { [weak canvas] amount in
             guard let canvas, let item = canvas.items.first(where: { $0.id == id && $0.enabled && $0.kind == .slider }) else { return false }
             if let metadata = item.splitter, !(1...4).contains(metadata.step.rawValue + amount) { return false }
@@ -99,6 +103,7 @@ final class NativeAXElement: NSAccessibilityElement {
     var onAction: (@MainActor (String) -> Void)?
     var onAdjust: (@MainActor (String, Int) -> Void)?
     var onShortcut: (@MainActor (NSEvent) -> Bool)?
+    var acceptsSurfaceFirstMouse: (@MainActor (NSEvent) -> Bool)?
     var contextMenu: (@MainActor (String) -> NSMenu?)?
     var panelMenu: (@MainActor (SlotID) -> NSMenu?)?
     var panelMenuPresenter: any NativePanelMenuPresenting = SystemNativePanelMenuPresenter()
@@ -120,6 +125,10 @@ final class NativeAXElement: NSAccessibilityElement {
     }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        guard let event, let acceptsSurfaceFirstMouse else { return super.acceptsFirstMouse(for: event) }
+        return acceptsSurfaceFirstMouse(event) || super.acceptsFirstMouse(for: event)
+    }
     init(frame: NSRect = .zero, focus: FocusCoordinator = FocusCoordinator(), accessibilityNotifications: any NativeAccessibilityNotifications = SystemNativeAccessibilityNotifications()) {
         self.focus = focus; self.accessibilityNotifications = accessibilityNotifications; super.init(frame: frame); focusRingType = .none
         setAccessibilityElement(false); setAccessibilityRole(.group)
@@ -128,7 +137,7 @@ final class NativeAXElement: NSAccessibilityElement {
     func update(items newItems: [NativeRenderItem], announceLayout: Bool = true, invalidatingDisplay: Bool = true) {
         precondition(Set(newItems.map(\.id)).count == newItems.count, "Render IDs must be unique within a canvas")
         guard items != newItems else { return }
-        let structureChanged = items.count != newItems.count || zip(items, newItems).contains { $0.id != $1.id || $0.kind != $1.kind }
+        let structureChanged = items.count != newItems.count || zip(items, newItems).contains { $0.id != $1.id || $0.kind != $1.kind || ($0.panelHeader != nil) != ($1.panelHeader != nil) }
         let previousItems = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         let dirty = NativeGeometry.dirtyRects(old: items, new: newItems)
         items = newItems
@@ -138,10 +147,11 @@ final class NativeAXElement: NSAccessibilityElement {
             let element = previous[item.id] ?? NativeAXElement(id: item.id, canvas: self)
             if previousItems[item.id] == item { return element }
             element.setAccessibilityParent(self); element.setAccessibilityIdentifier(item.panelHeader?.identifier ?? item.id)
-            element.setAccessibilityRole(item.role); element.setAccessibilityLabel(item.splitter.flatMap { $0.label.isEmpty ? nil : $0.label } ?? item.label)
+            let headerLabel = item.panelHeader.flatMap { $0.actionLabel.isEmpty ? nil : item.label + ", " + $0.actionLabel }
+            element.setAccessibilityRole(item.role); element.setAccessibilityLabel(item.splitter.flatMap { $0.label.isEmpty ? nil : $0.label } ?? headerLabel ?? item.label)
             element.setAccessibilityEnabled(item.enabled)
             element.setAccessibilityValueDescription(item.splitter?.valueDescription)
-            element.setAccessibilityHelp(item.splitter?.help)
+            element.setAccessibilityHelp(item.splitter?.help ?? item.panelHeader.flatMap { $0.actionLabel.isEmpty ? nil : $0.actionLabel })
             if let splitter = item.splitter {
                 element.setAccessibilityValue(NSNumber(value: splitter.step.rawValue))
                 element.setAccessibilityMinValue(NSNumber(value: 1)); element.setAccessibilityMaxValue(NSNumber(value: 4))
@@ -216,6 +226,7 @@ final class NativeAXElement: NSAccessibilityElement {
         Set([hoverID, pressedID, releaseFeedback?.id, focus.keyboardFocus ? focus.focusedID?.rawValue : nil].compactMap { $0 })
     }
     var drawsInteractionFeedback: Bool { true }
+    func panelHeaderTitleMetrics(_ item: NativeRenderItem) -> (font: NSFont, leading: CGFloat) { (NativeFont.primary, NativeSpace.sm) }
     func drawItem(_ item: NativeRenderItem) {
         NSGraphicsContext.saveGraphicsState()
         let scale = CGFloat(feedbackScale(for: item.id))
@@ -223,7 +234,19 @@ final class NativeAXElement: NSAccessibilityElement {
             context.translateBy(x: item.rect.midX, y: item.rect.midY); context.scaleBy(x: scale, y: scale)
             context.translateBy(x: -item.rect.midX, y: -item.rect.midY)
         }
-        paint(item); NSGraphicsContext.restoreGraphicsState()
+        paint(item)
+        if let header = item.panelHeader, header.titleRect.width >= NativeSpace.lg {
+            let metrics = panelHeaderTitleMetrics(item)
+            let textWidth = ceil((item.label as NSString).size(withAttributes: NativeFont.attributes(font: metrics.font, color: .labelColor)).width)
+            let textEnd = min(item.rect.maxX, item.rect.minX + metrics.leading + textWidth)
+            let center = CGPoint(x: min(header.titleRect.maxX - NativeSpace.sm, textEnd + NativeSpace.sm), y: header.titleRect.midY)
+            let path = NSBezierPath(); path.lineWidth = NativeSize.focusWidth
+            path.move(to: CGPoint(x: center.x - NativeSpace.xxs, y: center.y - NativeSpace.xxs))
+            path.line(to: CGPoint(x: center.x, y: center.y + NativeSpace.xxs))
+            path.line(to: CGPoint(x: center.x + NativeSpace.xxs, y: center.y - NativeSpace.xxs))
+            theme.color(.textSecondary).setStroke(); path.stroke()
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
     private func feedbackScale(for id: String) -> Double {
         guard !reduceMotion else { return 1 }
@@ -291,14 +314,14 @@ final class NativeAXElement: NSAccessibilityElement {
         if item.panelHeader != nil { _ = showMenu(for: id) } else { onAction?(id) }
     }
     private func preparePanelMenu(for item: NativeRenderItem) -> NSMenu? {
-        guard let header = item.panelHeader, window != nil, let menu = panelMenu?(header.slot) else { return nil }
+        guard let header = item.panelHeader, window != nil, (window?.firstResponder as? NSTextView)?.hasMarkedText() != true, let menu = panelMenu?(header.slot) else { return nil }
         panelMenuSession?.finish(restoreFocus: false)
         window?.makeFirstResponder(self); focus.focus(item.focusID)
         panelMenuSession = NativePanelMenuSession(menu: menu, focus: focus, returnID: item.focusID)
         return menu
     }
     func showMenu(for id: String) -> Bool {
-        guard let item = items.first(where: { $0.id == id && $0.enabled }) else { return false }
+        guard let item = items.first(where: { $0.id == id && $0.enabled && $0.isInteractive }) else { return false }
         if item.panelHeader != nil {
             guard let menu = preparePanelMenu(for: item) else { return false }
             let shown = panelMenuPresenter.present(menu, at: CGPoint(x: item.hitRect.minX, y: item.hitRect.maxY), in: self)
@@ -316,7 +339,9 @@ final class NativeAXElement: NSAccessibilityElement {
     override func mouseExited(with event: NSEvent) { invalidate(hoverID); hoverID = nil }
     override func mouseDown(with event: NSEvent) {
         stopReleaseFeedback()
-        let point = convert(event.locationInWindow, from: nil); pressedID = item(at: point)?.id
+        let point = convert(event.locationInWindow, from: nil)
+        if item(at: point)?.panelHeader != nil, (window?.firstResponder as? NSTextView)?.hasMarkedText() == true { pressedID = nil; return }
+        pressedID = item(at: point)?.id
         if let pressedID { window?.makeFirstResponder(self); if let item = items.first(where: { $0.id == pressedID }) { focus.focus(item.focusID, keyboard: false) }; invalidate(pressedID) }
     }
     override func mouseDragged(with event: NSEvent) { invalidate(pressedID); hoverID = item(at: convert(event.locationInWindow, from: nil))?.id }
@@ -379,6 +404,7 @@ final class NativeAXElement: NSAccessibilityElement {
     weak var canvas: NativeCanvasView?
     var painter: (@MainActor (NSRect) -> Void)?
     var backgroundTheme: NativeTheme?
+    var opaqueBackground = false
     var drawingOrigin = CGPoint.zero
     var isolatesBacking = false
     private var renderingBacking = false
@@ -418,15 +444,19 @@ final class NativeAXElement: NSAccessibilityElement {
             let translation = NSAffineTransform()
             translation.translateX(by: -drawingOrigin.x, yBy: -drawingOrigin.y); translation.concat()
         }
-        backgroundTheme?.panelGradient.draw(in: canvas?.bounds ?? superview?.bounds ?? bounds, angle: 150)
+        let backgroundBounds = canvas?.bounds ?? superview?.bounds ?? bounds
+        if opaqueBackground, let backgroundTheme { backgroundTheme.color(.panel).setFill(); NSBezierPath(rect: backgroundBounds).fill() }
+        backgroundTheme?.panelGradient.draw(in: backgroundBounds, angle: 150)
         let ownerDirty = paintRect.offsetBy(dx: drawingOrigin.x, dy: drawingOrigin.y)
         if let painter { painter(ownerDirty) } else { canvas?.draw(ownerDirty) }
     }
 }
 @MainActor class PanelContainerView: NativeCanvasView {
+    var showsEditingBorder = false { didSet { if oldValue != showsEditingBorder { updateBorder() } } }
     private var background: NativePanelBackgroundView?
     private let contentPaint = NativeCanvasPaintSurface(frame: .zero)
     var separatesBackgroundPlane: Bool { true }
+    var opaqueCombinedBackground: Bool { false }
     var backgroundPaintPassCount: Int { background?.paintPassCount ?? contentPaint.paintPassCount }
     var staticRasterPaintPassCount: Int { contentPaint.paintPassCount }
     var staticRasterLayer: CALayer? { contentPaint.layer }
@@ -438,7 +468,7 @@ final class NativeAXElement: NSAccessibilityElement {
             let plane = NativePanelBackgroundView(frame: bounds); plane.autoresizingMask = [.width, .height]
             background = plane; addSubview(plane, positioned: .below, relativeTo: nil)
         }
-        contentPaint.canvas = self; contentPaint.backgroundTheme = separatesBackgroundPlane ? nil : theme; contentPaint.frame = bounds; contentPaint.autoresizingMask = [.width, .height]
+        contentPaint.canvas = self; contentPaint.opaqueBackground = opaqueCombinedBackground; contentPaint.backgroundTheme = separatesBackgroundPlane ? nil : theme; contentPaint.frame = bounds; contentPaint.autoresizingMask = [.width, .height]
         addSubview(contentPaint, positioned: .above, relativeTo: background)
         updateBorder()
     }
@@ -463,7 +493,8 @@ final class NativeAXElement: NSAccessibilityElement {
     }
     private func updateBorder() {
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        layer?.borderColor = theme.color(.panelNativeBorder).cgColor; layer?.borderWidth = 1
+        layer?.borderColor = theme.color(showsEditingBorder ? .accentBlue : .panelNativeBorder).cgColor
+        layer?.borderWidth = showsEditingBorder ? 2 : 1
         CATransaction.commit()
     }
 }

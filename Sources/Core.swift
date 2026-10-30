@@ -610,8 +610,162 @@ private struct LegacyLayoutSplits {
     }
 }
 
+enum GridItemID: String, Codable, CaseIterable, Sendable { case calendar, wide, railTop, railMiddle, railBottom }
+struct GridRect: Codable, Equatable, Sendable {
+    let column: Int, row: Int, width: Int, height: Int
+    private enum CodingKeys: String, CodingKey { case column, row, width, height }
+    init(column: Int, row: Int, width: Int, height: Int) { self.column = column; self.row = row; self.width = width; self.height = height }
+    init(from decoder: Decoder) throws {
+        try requireKnownFields(decoder, ["column", "row", "width", "height"])
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        column = try c.decode(Int.self, forKey: .column); row = try c.decode(Int.self, forKey: .row)
+        width = try c.decode(Int.self, forKey: .width); height = try c.decode(Int.self, forKey: .height)
+    }
+    func overlaps(_ other: GridRect) -> Bool {
+        column < other.column + other.width && other.column < column + width && row < other.row + other.height && other.row < row + height
+    }
+}
+/// Shared Foundation-only grid projection and the two distinct rounding policies.
+struct GridGeometryProfile: Equatable, Sendable {
+    static let columns = 24, rows = 128
+    static let padding = 16.0, gap = 14.0
+    let pitchX: Double
+    let pitchY = 36.0
+    init(viewport: LayoutViewport) throws {
+        guard viewport.width.isFinite, viewport.height.isFinite, viewport.width > 0, viewport.height > 0 else {
+            throw BoardStorageError(.invalidData)
+        }
+        let resolved = max(52, (viewport.width - 2 * Self.padding + Self.gap) / Double(Self.columns))
+        guard resolved.isFinite, (resolved * Double(Self.columns)).isFinite,
+              (Self.padding + resolved * Double(Self.columns)).isFinite else { throw BoardStorageError(.invalidData) }
+        pitchX = resolved
+    }
+    func frame(for rect: GridRect) -> CGRect {
+        let x = Self.padding + Double(rect.column) * pitchX
+        let y = Self.padding + Double(rect.row) * pitchY
+        let width = Double(rect.width) * pitchX - Self.gap
+        let height = Double(rect.height) * pitchY - Self.gap
+        return CGRect(origin: CGPoint(x: x, y: y), size: CGSize(width: width, height: height))
+    }
+    func legacyQuantize(_ value: Double) throws -> Int {
+        guard value.isFinite, let result = Int(exactly: ceil(value - 0.5)) else { throw BoardStorageError(.invalidData) }
+        return result
+    }
+    func snapDelta(x: Double, y: Double) throws -> (column: Int, row: Int) {
+        (column: try pointerCellDelta(x, pitch: pitchX), row: try pointerCellDelta(y, pitch: pitchY))
+    }
+    private func pointerCellDelta(_ delta: Double, pitch: Double) throws -> Int {
+        guard delta.isFinite, pitch.isFinite, pitch > 0 else { throw BoardStorageError(.invalidData) }
+        let units = delta / pitch
+        guard units.isFinite, let result = Int(exactly: floor(units + 0.5)) else { throw BoardStorageError(.invalidData) }
+        return result
+    }
+}
+enum GridValidationError: Error, Equatable, Sendable { case hidden, bounds, minimum, collision, missing }
+enum GridResolver {
+    static let defaults: [GridItemID: GridRect] = [
+        .calendar: .init(column: 0, row: 0, width: 18, height: 14), .wide: .init(column: 0, row: 14, width: 18, height: 7),
+        .railTop: .init(column: 18, row: 0, width: 6, height: 7), .railMiddle: .init(column: 18, row: 7, width: 6, height: 7),
+        .railBottom: .init(column: 18, row: 14, width: 6, height: 7)]
+    static func validate(_ item: GridItemID, rect: GridRect, in layout: BoardLayout, allowHidden: Bool = false) throws {
+        guard layout.placements[item] != nil else { throw GridValidationError.missing }
+        guard allowHidden || !layout.hiddenSlots.contains(item.rawValue) else { throw GridValidationError.hidden }
+        guard rect.width >= (item == .calendar ? 12 : 6), rect.height >= (item == .calendar ? 13 : 4) else { throw GridValidationError.minimum }
+        guard rect.column >= 0, rect.row >= 0, rect.width <= GridGeometryProfile.columns, rect.height <= GridGeometryProfile.rows,
+              rect.column <= GridGeometryProfile.columns - rect.width, rect.row <= GridGeometryProfile.rows - rect.height else { throw GridValidationError.bounds }
+        for (other, occupied) in layout.placements where other != item && !layout.hiddenSlots.contains(other.rawValue) {
+            guard occupied.width > 0, occupied.width <= GridGeometryProfile.columns, occupied.height > 0, occupied.height <= GridGeometryProfile.rows,
+                  occupied.column >= 0, occupied.row >= 0, occupied.column <= GridGeometryProfile.columns - occupied.width,
+                  occupied.row <= GridGeometryProfile.rows - occupied.height else { throw GridValidationError.bounds }
+            if rect.overlaps(occupied) { throw GridValidationError.collision }
+        }
+    }
+    static func place(_ item: GridItemID, rect: GridRect, in layout: BoardLayout) throws -> BoardLayout {
+        try validate(item, rect: rect, in: layout)
+        var result = layout; result.placements[item] = rect; return result
+    }
+    static func migrate(_ legacy: BoardLayout, viewport: LayoutViewport) throws -> BoardLayout {
+        let profile = try PanelStepProfile(viewport: viewport)
+        let geometry = try GridGeometryProfile(viewport: viewport)
+        let pitchX = geometry.pitchX, pitchY = geometry.pitchY
+        let padding = GridGeometryProfile.padding, gap = GridGeometryProfile.gap
+        func frames(_ source: BoardLayout) throws -> [GridItemID: (Double, Double, Double, Double)] {
+            let steps = try LayoutStepResolver.effectiveSteps(layout: source, profile: profile)
+            let visible = profile.visibleRailSlots(hiddenSlots: source.hiddenSlots)
+            let width = profile.contentWidth, height = profile.contentHeight
+            let left = visible.isEmpty ? width : width - gap - profile.railWidth(steps.column)
+            let wideVisible = !source.hiddenSlots.contains("wide")
+            let calendarHeight = wideVisible ? height - gap - profile.height(.wide, step: steps.main) : height
+            var result: [GridItemID: (Double, Double, Double, Double)] = [.calendar: (padding, padding, left, calendarHeight)]
+            if wideVisible { result[.wide] = (padding, padding + calendarHeight + gap, left, profile.height(.wide, step: steps.main)) }
+            let x = padding + left + gap
+            var end = padding
+            for slot in visible where slot != .railBottom {
+                let y = end == padding ? padding : end + gap, h = profile.height(slot, step: steps[slot])
+                result[GridItemID(rawValue: slot.rawValue)!] = (x, y, profile.railWidth(steps.column), h); end = y + h
+            }
+            if visible.contains(.railBottom) {
+                let h = profile.height(.railBottom, step: steps.railBottom)
+                result[.railBottom] = (x, padding + height - h, profile.railWidth(steps.column), h)
+            }
+            return result
+        }
+        let visible = try frames(legacy)
+        var allVisible = legacy; allVisible.hiddenSlots = []
+        let virtual = try frames(allVisible)
+        var result = legacy; result.version = 4; result.placements = [:]
+        var adjusted = false
+        for item in GridItemID.allCases {
+            guard let frame = (legacy.hiddenSlots.contains(item.rawValue) ? virtual[item] : visible[item]) else { throw BoardStorageError(.protectedData) }
+            let values = [(frame.0 - padding) / pitchX, (frame.1 - padding) / pitchY, (frame.2 + gap) / pitchX, (frame.3 + gap) / pitchY]
+            let raw: [Int]
+            do { raw = try values.map { try geometry.legacyQuantize($0) } }
+            catch { throw BoardStorageError(.protectedData) }
+            let w = min(GridGeometryProfile.columns, max(item == .calendar ? 12 : 6, raw[2])), h = min(GridGeometryProfile.rows, max(item == .calendar ? 13 : 4, raw[3]))
+            let c = min(GridGeometryProfile.columns - w, max(0, raw[0])), r = min(GridGeometryProfile.rows - h, max(0, raw[1]))
+            var rect = GridRect(column: c, row: r, width: w, height: h)
+            if values.enumerated().contains(where: { abs($0.element - Double(raw[$0.offset])) > 1e-7 }) || [c, r, w, h] != raw { adjusted = true }
+            if !legacy.hiddenSlots.contains(item.rawValue) {
+                var best: GridRect?, distance = Int.max
+                for row in 0...(GridGeometryProfile.rows - h) { for column in 0...(GridGeometryProfile.columns - w) {
+                    let candidate = GridRect(column: column, row: row, width: w, height: h)
+                    let d = abs(column - c) + abs(row - r)
+                    if d < distance && !result.placements.contains(where: { !legacy.hiddenSlots.contains($0.key.rawValue) && candidate.overlaps($0.value) }) {
+                        best = candidate; distance = d
+                    }
+                } }
+                guard let best else { throw BoardStorageError(.protectedData) }
+                if best != rect { adjusted = true }; rect = best
+            }
+            result.placements[item] = rect
+        }
+        // Layout4 does not persist legacy steps; keep compatibility fields stable across restart.
+        result.columnStep = 3; result.mainStep = 3; result.railTopStep = 3
+        result.railMiddleStep = 3; result.railBottomStep = 3
+        result.migrationNoticePending = adjusted
+        try result.validate(); return result
+    }
+    static func restore(_ slot: SlotID, in layout: BoardLayout) throws -> BoardLayout {
+        guard layout.hiddenSlots.contains(slot.rawValue) else { return layout }
+        guard let item = GridItemID(rawValue: slot.rawValue), let original = layout.placements[item] else { throw GridValidationError.missing }
+        guard original.width >= 6, original.width <= GridGeometryProfile.columns, original.height >= 4, original.height <= GridGeometryProfile.rows,
+              original.column >= 0, original.row >= 0, original.column <= GridGeometryProfile.columns - original.width,
+              original.row <= GridGeometryProfile.rows - original.height else { throw GridValidationError.bounds }
+        var best: GridRect?, distance = Int.max
+        for row in 0...(GridGeometryProfile.rows - original.height) { for column in 0...(GridGeometryProfile.columns - original.width) {
+            let rect = GridRect(column: column, row: row, width: original.width, height: original.height)
+            let d = abs(column - original.column) + abs(row - original.row)
+            if d < distance, (try? validate(item, rect: rect, in: layout, allowHidden: true)) != nil { best = rect; distance = d }
+        } }
+        guard let best else { throw GridValidationError.collision }
+        var result = layout; result.placements[item] = best; result.hiddenSlots.remove(slot.rawValue); return result
+    }
+}
+
 struct BoardLayout: Codable, Equatable, Sendable {
-    var version = 3
+    var version = 4
+    var placements = GridResolver.defaults
+    var migrationNoticePending = false
     var columnStep = 3, mainStep = 3, railTopStep = 3, railMiddleStep = 3, railBottomStep = 3
     // Source compatibility until the board/kit owners switch to the typed resolver.
     // These legacy read-only inputs are never encoded; validation rejects new ratio writes.
@@ -631,7 +785,7 @@ struct BoardLayout: Codable, Equatable, Sendable {
     init() {}
     enum CodingKeys: String, CodingKey, CaseIterable {
         case version, columnSplit, mainSplit, railSplit, railBottomSplit, hiddenPanels, slots, hiddenSlots
-        case columnStep, mainStep, railTopStep, railMiddleStep, railBottomStep
+        case columnStep, mainStep, railTopStep, railMiddleStep, railBottomStep, placements, migrationNoticePending
     }
     var steps: LayoutSteps {
         LayoutSteps(column: PanelSizeStep(rawValue: columnStep) ?? .regular, main: PanelSizeStep(rawValue: mainStep) ?? .regular,
@@ -654,12 +808,30 @@ struct BoardLayout: Codable, Equatable, Sendable {
         columnStep = 3; mainStep = 3; railTopStep = 3; railMiddleStep = 3; railBottomStep = 3
         columnSplit = nil; mainSplit = nil; railSplit = nil; railBottomSplit = nil
         hiddenSlots = []
+        if version == 4 { placements = GridResolver.defaults }
     }
     func validate() throws {
-        guard version == 3, [columnStep, mainStep, railTopStep, railMiddleStep, railBottomStep].allSatisfy({ (1...4).contains($0) }),
+        guard (version == 3 || version == 4), [columnStep, mainStep, railTopStep, railMiddleStep, railBottomStep].allSatisfy({ (1...4).contains($0) }),
         [columnSplit, mainSplit, railSplit, railBottomSplit].allSatisfy({ $0 == nil }),
         Set(slots.keys) == Set(SlotID.allCases.map(\.rawValue)), Set(slots.values).count == 4,
         hiddenSlots.isSubset(of: Set(SlotID.allCases.map(\.rawValue))) else { throw BoardStorageError(.invalidData) }
+        if version == 4 {
+            guard Set(placements.keys) == Set(GridItemID.allCases) else { throw BoardStorageError(.invalidData) }
+            for (item, rect) in placements {
+                guard rect.width >= (item == .calendar ? 12 : 6), rect.height >= (item == .calendar ? 13 : 4),
+                      rect.width <= GridGeometryProfile.columns, rect.height <= GridGeometryProfile.rows, rect.column >= 0, rect.row >= 0,
+                      rect.column <= GridGeometryProfile.columns - rect.width, rect.row <= GridGeometryProfile.rows - rect.height else { throw BoardStorageError(.invalidData) }
+            }
+            for item in GridItemID.allCases {
+                guard let rect = placements[item] else { throw BoardStorageError(.invalidData) }
+                do {
+                    if hiddenSlots.contains(item.rawValue) {
+                        var isolated = self; isolated.hiddenSlots = Set(SlotID.allCases.map(\.rawValue)); isolated.placements = [item: rect]
+                        try GridResolver.validate(item, rect: rect, in: isolated, allowHidden: true)
+                    } else { try GridResolver.validate(item, rect: rect, in: self) }
+                } catch { throw BoardStorageError(.invalidData) }
+            }
+        }
     }
     init(from decoder: Decoder) throws {
         self = try Self.decoded(from: decoder).layout
@@ -668,10 +840,11 @@ struct BoardLayout: Codable, Equatable, Sendable {
         var layout = Self()
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let sourceVersion = try c.decode(Int.self, forKey: .version)
-        guard (1...3).contains(sourceVersion) else { throw BoardStorageError(.protectedData) }
+        guard (1...4).contains(sourceVersion) else { throw BoardStorageError(.protectedData) }
+        layout.version = sourceVersion == 4 ? 4 : 3
         let sizes: [CodingKeys] = [.columnStep, .mainStep, .railTopStep, .railMiddleStep, .railBottomStep]
         let ratios: [CodingKeys] = [.columnSplit, .mainSplit, .railSplit, .railBottomSplit]
-        let allowed: [CodingKeys] = [.version] + (sourceVersion == 3 ? sizes : ratios)
+        let allowed: [CodingKeys] = [.version] + (sourceVersion == 4 ? [.placements, .migrationNoticePending] : sourceVersion == 3 ? sizes : ratios)
             + (sourceVersion == 1 ? [.hiddenPanels] : [.slots, .hiddenSlots])
         try requireKnownFields(decoder, allowed.map(\.rawValue))
         if sourceVersion == 1 {
@@ -684,7 +857,12 @@ struct BoardLayout: Codable, Equatable, Sendable {
             layout.hiddenSlots = Set(hidden)
         }
         var repair = false
-        if sourceVersion == 3 {
+        if sourceVersion == 4 {
+            let raw = try c.decode([String: GridRect].self, forKey: .placements)
+            guard Set(raw.keys) == Set(GridItemID.allCases.map(\.rawValue)) else { throw BoardStorageError(.protectedData) }
+            layout.placements = Dictionary(uniqueKeysWithValues: raw.map { (GridItemID(rawValue: $0.key)!, $0.value) })
+            layout.migrationNoticePending = try c.decode(Bool.self, forKey: .migrationNoticePending)
+        } else if sourceVersion == 3 {
             func step(_ key: CodingKeys) -> Int {
                 guard let value = try? c.decode(Int.self, forKey: key), (1...4).contains(value) else { repair = true; return 3 }
                 return value
@@ -708,11 +886,21 @@ struct BoardLayout: Codable, Equatable, Sendable {
             } else if legacy.hasRatio { throw BoardStorageError(.protectedData) }
         }
         try layout.validate()
+        if sourceVersion < 4 {
+            guard let viewport = decoder.userInfo[.layoutViewport] as? LayoutViewport else { throw BoardStorageError(.protectedData) }
+            layout = try GridResolver.migrate(layout, viewport: viewport)
+        }
         return (layout, sourceVersion, repair)
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(version, forKey: .version)
+        if version == 4 {
+            try c.encode(Dictionary(uniqueKeysWithValues: placements.map { ($0.key.rawValue, $0.value) }), forKey: .placements)
+            try c.encode(migrationNoticePending, forKey: .migrationNoticePending)
+            try c.encode(slots, forKey: .slots); try c.encode(hiddenSlots.sorted(), forKey: .hiddenSlots)
+            return
+        }
         try c.encode(columnStep, forKey: .columnStep); try c.encode(mainStep, forKey: .mainStep)
         try c.encode(railTopStep, forKey: .railTopStep); try c.encode(railMiddleStep, forKey: .railMiddleStep); try c.encode(railBottomStep, forKey: .railBottomStep)
         try c.encode(slots, forKey: .slots); try c.encode(hiddenSlots.sorted(), forKey: .hiddenSlots)
@@ -775,7 +963,7 @@ struct BoardState: Codable, Equatable, Sendable {
         if sourceVersion < 3 { migrationKind = .schema(sourceVersion) }
         self.init()
         boardRevision = sourceVersion == 1 || !c.contains(.boardRevision) ? 0 : try c.decode(Int.self, forKey: .boardRevision)
-        if sourceVersion == 2 {
+        if sourceVersion < 3 {
             guard boardRevision >= 0, boardRevision < Int.max else { throw BoardStorageError(.protectedData) }
             boardRevision += 1
         }
@@ -807,11 +995,16 @@ struct BoardState: Codable, Equatable, Sendable {
             guard sourceVersion < 3 || decoded.version >= 2 else { throw BoardStorageError(.protectedData) }
             layout = decoded.layout
             repairNeeded = decoded.repair
-            if sourceVersion == 3, decoded.version < 3 || decoded.repair {
+            if sourceVersion == 3, decoded.version < 4 || decoded.repair {
                 guard boardRevision >= 0, boardRevision < Int.max else { throw BoardStorageError(.protectedData) }
                 boardRevision += 1
-                if decoded.version < 3 { migrationKind = .layout(decoded.version) }
+                if decoded.version < 4 { migrationKind = .layout(decoded.version) }
             }
+        }
+        if !c.contains(.layout) && sourceVersion < 3 {
+            guard let viewport = decoder.userInfo[.layoutViewport] as? LayoutViewport else { throw BoardStorageError(.protectedData) }
+            var legacy = BoardLayout(); legacy.version = 3
+            layout = try GridResolver.migrate(legacy, viewport: viewport)
         }
         if sourceVersion == 3 {
             subscriptions = c.contains(.subscriptions) ? try c.decode([Subscription].self, forKey: .subscriptions) : []
@@ -906,6 +1099,7 @@ final class BoardStore {
         do {
             guard canSave else { throw BoardStorageError(.protectedData) }
             guard baseRevision == nil || baseRevision == state.boardRevision else { throw BoardStorageError(.conflict) }
+            guard candidate.layout.version == 4 else { throw BoardStorageError(.invalidData) }
             try candidate.validate()
         } catch {
             let failure = (error as? BoardStorageError) ?? BoardStorageError(.invalidData)
@@ -974,6 +1168,7 @@ struct LocalStateFile: BoardPersistence {
     }
 
     func save(_ state: BoardState) throws {
+        guard state.layout.version == 4 else { throw BoardStorageError(.invalidData) }
         try state.validate()
         let original = try checkPath() ? readFile(url) : nil
         let decoded = try original.map { try decodeResult($0) }

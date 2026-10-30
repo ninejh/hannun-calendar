@@ -50,7 +50,7 @@ enum PanelField: String, Sendable {
 enum FieldPath: Sendable, Equatable {
     case operation, range, configuration, notes
     case project(UUID?, ProjectField), countdown(UUID?, CountdownField)
-    case event(EventField), settings(SettingsField), layout(LayoutSplit)
+    case event(EventField), settings(SettingsField), layout(LayoutSplit), gridLayout(GridItemID?)
     case panel(PanelID, id: UUID?, field: PanelField)
 }
 

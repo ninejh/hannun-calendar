@@ -93,6 +93,15 @@ import Foundation
             guard !entries.contains(where: { $0.id == id }), let i = recovery.firstIndex(where: { $0.id == id }),
                   recovery[i].failure?.committed == .no, (recovery[i].failure?.retryable == true || recovery[i].failure?.code == .boardConflict),
                   let command = recovery[i].command else { return nil }
+            if case .edit(.layout(.place(let item, let rect)), _) = command {
+                do { try GridResolver.validate(item, rect: rect, in: state.snapshot.board.layout) }
+                catch let error as GridValidationError {
+                    let reason: String = switch error { case .hidden: "hidden"; case .bounds: "bounds"; case .minimum: "minimum"; case .collision: "collision"; case .missing: "missing" }
+                    state.lastError = AppFailure(code: .validationFailed, field: .gridLayout(item), messageKey: "error.grid." + reason)
+                    publish([.error]); return nil
+                } catch { state.lastError = AppFailure(code: .validationFailed); publish([.error]); return nil }
+                if state.snapshot.board.layout.placements[item] == rect { return nil }
+            }
             let feedback = recovery[i].feedback
             recovery.remove(at: i)
             if case .edit(.notes, _) = command { return startNotes() }

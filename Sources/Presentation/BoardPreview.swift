@@ -46,11 +46,16 @@ enum BoardPreview {
                 let old = board.layout.slots[slot.rawValue]
                 if let other = board.layout.slots.first(where: { $0.value == panel })?.key { board.layout.slots[other] = old }
                 board.layout.slots[slot.rawValue] = panel
-            case .setHidden(let slot, let hidden): if hidden { board.layout.hiddenSlots.insert(slot.rawValue) } else { board.layout.hiddenSlots.remove(slot.rawValue) }
+            case .setHidden(let slot, let hidden):
+                if hidden { board.layout.hiddenSlots.insert(slot.rawValue) }
+                else if let restored = try? GridResolver.restore(slot, in: board.layout) { board.layout = restored }
             case .setStep(let split, let step, let viewport):
                 if let layout = try? LayoutStepResolver.resolve(layout: board.layout, split: split, step: step, viewport: viewport) {
                     board.layout = layout
                 }
+            case .place(let item, let rect):
+                if let layout = try? GridResolver.place(item, rect: rect, in: board.layout) { board.layout = layout }
+            case .dismissMigrationNotice: board.layout.migrationNoticePending = false
             case .setSplit: break // Native rejects legacy ratio writes; they have no optimistic projection.
             case .reset: board.layout.resetSizes()
             }

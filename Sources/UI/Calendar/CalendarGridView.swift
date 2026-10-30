@@ -47,6 +47,7 @@ private struct CalendarRenderKey: Equatable {
     private var feedbackKey: FeedbackKey?
     // Calendar alone combines its immutable gradient and content. Focus retains its small dynamic dial.
     override var separatesBackgroundPlane: Bool { false }
+    override var opaqueCombinedBackground: Bool { true }
     override var drawsInteractionFeedback: Bool { paintingFeedback }
     override func updateLayer() { refreshFeedback() }
     override func setNeedsDisplay(_ invalidRect: NSRect) { refreshFeedback() }
@@ -68,11 +69,13 @@ private struct CalendarRenderKey: Equatable {
     private var titleFont: NSFont { (boardViewportWidth ?? bounds.width) <= BoardLayoutMetrics.mediumBreakpoint ? NativeFont.monthTitleCompact : NativeFont.monthTitle }
     var boardViewportWidth: CGFloat? { didSet { if oldValue != boardViewportWidth { needsLayout = true } } }
     var boardShortcut: (@MainActor (NSEvent) -> Bool)?
+    var toggleLayoutEditing: (@MainActor () -> Void)?
+    var layoutEditing = false { didSet { if oldValue != layoutEditing { renderKey = nil; needsLayout = true; render() } } }
     init(context: BoardScreenContext) {
         self.context = context; super.init(frame: .zero, focus: context.focus)
         spinner.fillColor = nil; spinner.lineWidth = NativeSize.focusWidth; spinner.isHidden = true; layer?.addSublayer(spinner)
         for surface in feedbackSurfaces {
-            surface.isHidden = true; addSubview(surface)
+            surface.isHidden = true; surface.opaqueBackground = true; addSubview(surface)
             surface.painter = { [weak self] dirty in
                 guard let self else { return }; self.paintingFeedback = true
                 defer { self.paintingFeedback = false }
@@ -118,6 +121,7 @@ private struct CalendarRenderKey: Equatable {
         // The footer belongs to the setting, so data arrival/offline changes never resize the grid.
         let weatherEnabled = board.settings.weather.enabled
         let footer = weatherEnabled ? CalendarMetrics.weatherHeight : 0
+        let editingBottom: CGFloat = layoutEditing ? 32 : 0
         let bannerHeight: CGFloat = snapshot.calendarAuthorization == .authorized ? 0 : NativeSize.toolbarHeight + NativeSpace.md
         if bannerHeight > 0 {
             let authorization = snapshot.calendarAuthorization
@@ -127,7 +131,7 @@ private struct CalendarRenderKey: Equatable {
             output.append(NativeRenderItem(id: "action.connectCalendars", rect: CGRect(x: max(NativeSpace.xl, bounds.width - NativeSize.popoverWidth / 2), y: toolbarBottom + NativeSpace.xs, width: NativeSize.popoverWidth / 2 - NativeSpace.xl, height: NativeSize.toolbarHeight), label: context.text(action), kind: .button, color: .accentBlue))
         }
         let weekdayY = toolbarBottom + bannerHeight
-        gridRect = CGRect(x: 0, y: weekdayY + CalendarMetrics.weekdayHeight, width: bounds.width, height: max(0, bounds.height - weekdayY - CalendarMetrics.weekdayHeight - footer))
+        gridRect = CGRect(x: 0, y: weekdayY + CalendarMetrics.weekdayHeight, width: bounds.width, height: max(0, bounds.height - weekdayY - CalendarMetrics.weekdayHeight - footer - editingBottom))
         let weekStart: Int
         switch board.settings.weekStart { case .sunday: weekStart = 1; case .monday: weekStart = 2; case .system: weekStart = snapshot.environment.resolvedWeekStart }
         let days = NativeCalendarLayout.days(month: next.month, selected: next.selected, mode: next.mode, weekStart: weekStart)
@@ -204,15 +208,8 @@ private struct CalendarRenderKey: Equatable {
                 }
             }
         }
-        if weatherEnabled {
-            var x = NativeSpace.xl
-            for (id, label) in [("action.weatherProvider", context.text("weather.provider_name")), ("action.weatherLicense", context.text("weather.license_name"))] {
-                let width = (label as NSString).size(withAttributes: [.font: NativeFont.toolbar]).width + NativeSpace.lg
-                output.append(NativeRenderItem(id: id, rect: CGRect(x: x, y: bounds.maxY - footer, width: width, height: footer), label: label, kind: .button, color: .weatherCredit)); x += width + NativeSpace.xs
-                output.append(NativeRenderItem(id: "calendar.separator.\(id)", rect: CGRect(x: x, y: bounds.maxY - footer, width: NativeSpace.sm, height: footer), label: "·", kind: .text, color: .weatherCredit)); x += NativeSpace.sm + NativeSpace.xs
-            }
-            let status = snapshot.external.weather.state == .stale || snapshot.external.weather.state == .unavailable ? " · " + context.text("status.weather_offline") : ""
-            output.append(NativeRenderItem(id: "calendar.weatherCredit", rect: CGRect(x: x, y: bounds.maxY - footer, width: max(0, bounds.width - x - NativeSpace.xl), height: footer), label: context.text("weather.transformation").trimmingCharacters(in: CharacterSet(charactersIn: ".")) + status, kind: .text, color: .weatherCredit))
+        if weatherEnabled && (snapshot.external.weather.state == .stale || snapshot.external.weather.state == .unavailable) {
+            output.append(NativeRenderItem(id: "calendar.weatherOffline", rect: CGRect(x: NativeSpace.xl, y: bounds.maxY - footer - editingBottom, width: max(0, bounds.width - NativeSpace.xl * 2), height: footer), label: context.text("status.weather_offline"), kind: .text, color: .weatherCredit))
         }
         update(items: output, invalidatingDisplay: false)
         if staticKeyChanged || oldVisibleDays != Set(cellRects.keys) { super.setNeedsDisplay(bounds) }
@@ -263,13 +260,15 @@ private struct CalendarRenderKey: Equatable {
         }
         button("action.calendars", context.text("toolbar.calendars"), width: key.viewportWidth <= BoardLayoutMetrics.mediumBreakpoint ? h : ceil((context.text("toolbar.calendars") as NSString).size(withAttributes: [.font: NativeFont.toolbar]).width) + NativeSpace.lg)
         button("action.search", context.text("toolbar.search"), width: key.viewportWidth <= BoardLayoutMetrics.mediumBreakpoint ? h : ceil((context.text("toolbar.search") as NSString).size(withAttributes: [.font: NativeFont.toolbar]).width) + NativeSpace.lg)
-        let layout = context.text("layout.menu.title")
-        button("action.layout", layout, width: max(44, ceil(((layout + " ⌄") as NSString).size(withAttributes: [.font: NativeFont.toolbar]).width) + NativeSpace.lg), height: h)
-        output[output.count - 1].kind = .menuButton; output[output.count - 1].minimumTarget = 44
         let density = context.text(key.settings.compact ? "toolbar.density_label_compact" : "toolbar.density_label_comfortable")
         button("action.density", density, width: ceil((density as NSString).size(withAttributes: [.font: NativeFont.toolbar]).width) + NativeSpace.lg)
         let newTitle = context.text("toolbar.new_event")
         button("action.newEvent", newTitle, width: ceil((newTitle as NSString).size(withAttributes: [.font: NativeFont.primary]).width) + NativeSpace.xxl + NativeSpace.lg + NativeSpace.xs, fill: .fill)
+        if layoutEditing {
+            let layout = context.text("grid.done")
+            button("action.layout", layout, width: max(44, ceil((layout as NSString).size(withAttributes: [.font: NativeFont.toolbar]).width) + NativeSpace.lg), height: h)
+            output[output.count - 1].minimumTarget = 44
+        }
         return y + rowHeight + CalendarMetrics.toolbarBottom
     }
     private func appendEvent(_ record: EventRecord, id: String, rect: CGRect, continuation: (Bool, Bool), key: CalendarRenderKey, zone: TimeZone, output: inout [NativeRenderItem]) {
@@ -308,13 +307,11 @@ private struct CalendarRenderKey: Equatable {
         case "action.calendars": context.routing.route(.openCalendars(anchor: anchor(id, target: .control(id))))
         case "action.search": context.routing.route(.openSearch(initialQuery: "", anchor: anchor(id, target: .control(id))))
         case "action.newEvent": context.routing.route(.openAdd(AddRequest(kind: .event, day: context.presentation.state.view.selectedDay, anchor: anchor(id, target: .control(id)))))
-        case "action.layout": _ = showMenu(for: id)
+        case "action.layout": if layoutEditing { toggleLayoutEditing?() }
         case "action.density": var patch = SettingsPatch(); patch.compact = .set(!context.presentation.state.snapshot.board.settings.compact); context.presentation.send(.edit(.settings(patch), undoable: false))
         case "action.connectCalendars":
             if context.presentation.state.snapshot.calendarAuthorization == .denied || context.presentation.state.snapshot.calendarAuthorization == .restricted { context.presentation.send(.command(.open(.privacy))) }
             else { context.presentation.send(.command(.connect)) }
-        case "action.weatherProvider": context.presentation.send(.command(.openAttribution(.weather)))
-        case "action.weatherLicense": context.presentation.send(.command(.openAttribution(.weatherLicense)))
         default: break
         }
     }
@@ -395,14 +392,19 @@ private struct CalendarRenderKey: Equatable {
         }
         if item.id.hasPrefix("calendar.weather.") { return }
         if let tint = tints[item.id] {
-            (paintingFeedback && hoveredItemID == item.id ? theme.color(.hover) : theme.tint(tint, background: true)).setFill(); NSBezierPath(roundedRect: item.rect, xRadius: NativeRadius.chip, yRadius: NativeRadius.chip).fill()
-            var text = item.rect.insetBy(dx: NativeSpace.xs, dy: NativeSpace.xxs)
+            let category = theme.tint(tint), base = theme.tint(tint, background: true)
+            let fill = base.blended(withFraction: theme.appearance == .dark ? 0.28 : 0.24, of: category) ?? base
+            (paintingFeedback && hoveredItemID == item.id ? theme.color(.hover) : fill).setFill()
+            NSBezierPath(roundedRect: item.rect, xRadius: NativeRadius.chip, yRadius: NativeRadius.chip).fill()
+            category.setFill()
+            NSBezierPath(rect: CGRect(x: item.rect.minX + 1, y: item.rect.minY + NativeSpace.xxs, width: 5, height: max(0, item.rect.height - 2 * NativeSpace.xxs))).fill()
+            var text = item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xxs)
             if let time = eventTimes[item.id] {
                 let width = (time as NSString).size(withAttributes: [.font: NativeFont.eventTime]).width
-                drawText(time, in: CGRect(x: text.minX, y: text.minY, width: min(width, text.width), height: text.height), font: NativeFont.eventTime, color: theme.tint(tint))
+                drawText(time, in: CGRect(x: text.minX, y: text.minY, width: min(width, text.width), height: text.height), font: NativeFont.eventTime, color: theme.color(.textPrimary))
                 text.origin.x += width + NativeSpace.xs; text.size.width = max(0, item.rect.maxX - NativeSpace.xs - text.minX)
             }
-            drawText(item.value ?? item.label, in: text, font: NativeFont.eventChip, color: theme.tint(tint)); paintFocus(item); return
+            drawText(item.value ?? item.label, in: text, font: NativeFont.eventChip, color: theme.color(.textPrimary)); paintFocus(item); return
         }
         if let day = addDays[item.id] {
             if paintingFeedback && (hoveredDay == day || focus.focusedID == FocusID(item.id) || focus.focusedID == FocusID("calendar.day.\(day)")) { drawText("+", in: item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xs), font: NativeFont.body, color: theme.color(.textQuiet)) }
@@ -418,8 +420,15 @@ private struct CalendarRenderKey: Equatable {
             let outline = NSBezierPath(roundedRect: item.rect.insetBy(dx: 0.5, dy: 0.5), xRadius: NativeRadius.button, yRadius: NativeRadius.button)
             outline.lineWidth = 1; outline.stroke()
             let icon = item.rect.width <= NativeSize.toolbarHeight && (item.id == "action.calendars" || item.id == "action.search")
-            let label = icon ? (item.id == "action.calendars" ? "▦" : "⌕") : item.id == "action.layout" ? item.label + " ⌄" : item.label
-            drawCentered(label, in: item.rect.insetBy(dx: NativeSpace.sm, dy: 0), font: icon ? NativeFont.primary : NativeFont.toolbar, color: theme.color(item.color))
+            let label = icon ? (item.id == "action.calendars" ? "▦" : "⌕") : item.label
+            if icon {
+                let font = NativeFont.primary, color = theme.color(item.color)
+                let attrs = NativeFont.attributes(font: font, color: color)
+                let ink = (label as NSString).boundingRect(with: CGSize(width: item.rect.width, height: item.rect.height), options: [.usesDeviceMetrics], attributes: attrs)
+                let height = (label as NSString).size(withAttributes: attrs).height
+                let x = item.rect.midX - ink.midX
+                drawText(label, in: CGRect(x: x, y: item.rect.midY - height / 2, width: max(0, item.rect.maxX - x), height: height), font: font, color: color)
+            } else { drawCentered(label, in: item.rect.insetBy(dx: NativeSpace.sm, dy: 0), font: NativeFont.toolbar, color: theme.color(item.color)) }
             paintFocus(item); return
         }
         let symbol: String?
@@ -431,18 +440,18 @@ private struct CalendarRenderKey: Equatable {
             drawCentered(monthParts.year, in: CGRect(x: item.rect.minX + width + NativeSpace.sm, y: item.rect.minY, width: max(0, item.rect.width - width - NativeSpace.sm), height: item.rect.height), font: NativeFont.yearTitle, color: theme.color(.textSecondary)); paintFocus(item); return
         }
         if item.id.hasPrefix("calendar.weekday") { drawText(item.label, in: item.rect.insetBy(dx: NativeSpace.md, dy: NativeSpace.sm), font: NativeFont.weekday, color: theme.color(item.color), tracking: NativeTracking.weekday); return }
-        if item.id.hasPrefix("action.") || item.id == "calendar.weatherCredit" || item.id.hasPrefix("calendar.separator.") {
+        if item.id.hasPrefix("action.") || item.id == "calendar.weatherOffline" {
             var background = item; background.label = ""; super.paint(background)
             if item.id == "action.newEvent" { theme.color(paintingFeedback && hoveredItemID == item.id ? .fillHover : .fill).setFill(); NSBezierPath(roundedRect: item.rect, xRadius: NativeRadius.button, yRadius: NativeRadius.button).fill() }
             let color = item.id == "action.newEvent" ? theme.color(.toastText) : theme.color(item.color)
-            var textRect = item.rect.insetBy(dx: item.id.hasPrefix("calendar.separator") ? 0 : NativeSpace.sm, dy: 0)
+            var textRect = item.rect.insetBy(dx: NativeSpace.sm, dy: 0)
             if item.id == "action.newEvent" {
                 let center = CGPoint(x: item.rect.minX + NativeSpace.md + NativeSpace.sm, y: item.rect.midY)
                 color.setStroke(); let plus = NSBezierPath(); plus.lineWidth = NativeSize.focusWidth
                 plus.move(to: CGPoint(x: center.x - NativeSpace.xs, y: center.y)); plus.line(to: CGPoint(x: center.x + NativeSpace.xs, y: center.y)); plus.move(to: CGPoint(x: center.x, y: center.y - NativeSpace.xs)); plus.line(to: CGPoint(x: center.x, y: center.y + NativeSpace.xs)); plus.stroke()
                 textRect.origin.x = item.rect.minX + NativeSpace.md + NativeSpace.lg + NativeSpace.xs; textRect.size.width = max(0, item.rect.maxX - NativeSpace.md - textRect.minX)
             }
-            let visibleLabel = item.id == "action.layout" ? item.label + " ⌄" : item.label
+            let visibleLabel = item.label
             drawCentered(visibleLabel, in: textRect, font: item.id == "action.newEvent" ? NativeFont.primary : NativeFont.toolbar, color: color); paintFocus(item); return
         }
         super.paint(item)

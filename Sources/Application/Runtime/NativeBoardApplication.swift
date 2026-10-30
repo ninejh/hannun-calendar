@@ -310,16 +310,24 @@ struct NativeViewportStateFile: BoardPersistence {
                 await calendars.refresh(ranges: ranges, now: preferences.now, refreshSources: sources)
 #endif
             }
-            if let error = calendars.error { throw AppFailure(code: AppFailureCode(rawValue: error) ?? .calendarUnavailable, retryable: true) }
-            if !calendars.authorized && !calendars.demo { throw AppFailure(code: .calendarPermission) }
+            if let error = calendars.error {
+                let code = AppFailureCode(rawValue: error) ?? .calendarUnavailable
+                throw AppFailure(code: code, messageKey: "error." + code.rawValue.lowercased(), retryable: true)
+            }
+            if !calendars.authorized && !calendars.demo {
+                throw AppFailure(code: .calendarPermission, messageKey: "error.calendar_permission")
+            }
             adoptCalendarRefresh(capture)
             return .refreshed
         case .connect:
             let capture = try await captureCalendarRefresh {
                 try await calendars.connect(ranges: ranges, now: preferences.now)
             }
-            guard calendars.authorized else { throw AppFailure(code: .calendarPermission) }
-            if let error = calendars.error { throw AppFailure(code: AppFailureCode(rawValue: error) ?? .calendarUnavailable, retryable: true) }
+            guard calendars.authorized else { throw AppFailure(code: .calendarPermission, messageKey: "error.calendar_permission") }
+            if let error = calendars.error {
+                let code = AppFailureCode(rawValue: error) ?? .calendarUnavailable
+                throw AppFailure(code: code, messageKey: "error." + code.rawValue.lowercased(), retryable: true)
+            }
             adoptCalendarRefresh(capture)
             return .connected
         case .edit(let edit, _):
@@ -446,7 +454,10 @@ struct NativeViewportStateFile: BoardPersistence {
             let capture = await captureCalendarRefresh {
                 await calendars.refresh(ranges: ranges, now: preferences.now)
             }
-            if let error = calendars.error { throw AppFailure(code: AppFailureCode(rawValue: error) ?? .calendarUnavailable) }
+            if let error = calendars.error {
+                let code = AppFailureCode(rawValue: error) ?? .calendarUnavailable
+                throw AppFailure(code: code, messageKey: "error." + code.rawValue.lowercased())
+            }
             adoptCalendarRefresh(capture)
             loaded = true; lastCalendarRefresh = preferences.now; publishSnapshot()
             return .success(.loaded, snapshot: current)
@@ -478,6 +489,9 @@ struct NativeViewportStateFile: BoardPersistence {
         let nextSequence = current.sequence + 1
         let calendarRefreshedAt = current.calendarRefreshedAt
         do {
+#if HANNUN_TESTING
+            try testControls.checkSnapshot()
+#endif
             current = try Self.snapshot(sessionID: sessionID, sequence: nextSequence, configuration: configuration, store: store,
                                         calendars: calendars, preferences: preferences, clock: clock, panels: panels)
             projectionWarning = nil
@@ -485,10 +499,18 @@ struct NativeViewportStateFile: BoardPersistence {
             // Preserve the last safe derived summary, but still publish the latest durable
             // board/calendar/focus and the failure; a failed projection cannot silence recovery.
             projectionWarning = NativeRuntimeErrors.normalize(error)
-            if let fallback = try? Self.snapshot(sessionID: sessionID, sequence: nextSequence, configuration: configuration, store: store,
+            do {
+#if HANNUN_TESTING
+                try testControls.checkSnapshot()
+#endif
+                current = try Self.snapshot(sessionID: sessionID, sequence: nextSequence, configuration: configuration, store: store,
                                       calendars: calendars, preferences: preferences, clock: clock, panels: panels,
-                                      fallbackSummary: current.subscriptionSummary) { current = fallback }
-            else { current.sequence = nextSequence }
+                                      fallbackSummary: current.subscriptionSummary)
+            } catch {
+                // Keep the authoritative durable board even when every projection fails.
+                // Mark the partial snapshot protected until a complete projection succeeds.
+                current.board = store.state; current.sequence = nextSequence; current.storage = .protected
+            }
         }
         current.calendarRefreshedAt = calendarRefreshedAt
         current.storageWarning = effectiveStorageWarning

@@ -18,47 +18,39 @@ struct BoardLayoutGeometry {
     /// Transparent space only: never rendered or registered for hit, focus or AX.
     var railBlank: CGRect?
 
+    var gridProfile: GridGeometryProfile?
+    var pitchX: CGFloat { CGFloat(gridProfile?.pitchX ?? 0) }
+    var pitchY: CGFloat = 0
+    func frame(for rect: GridRect) -> CGRect {
+        guard let profile = gridProfile else { return .zero }
+        var frame = profile.frame(for: rect)
+        frame.origin.y = CGFloat(GridGeometryProfile.padding) + CGFloat(rect.row) * pitchY
+        frame.size.height = CGFloat(rect.height) * pitchY - CGFloat(GridGeometryProfile.gap)
+        return frame
+    }
     static func make(viewport: CGSize, layout: BoardLayout) -> BoardLayoutGeometry {
-        let viewportValue = LayoutViewport(width: viewport.width, height: viewport.height)
-        guard let profile = try? PanelStepProfile(viewport: viewportValue),
-              let steps = try? LayoutStepResolver.effectiveSteps(layout: layout, profile: profile) else { return BoardLayoutGeometry() }
-        let pad = CGFloat(PanelStepProfile.padding), gap = CGFloat(PanelStepProfile.gap)
-        let width = CGFloat(profile.contentWidth), height = CGFloat(profile.contentHeight)
-        let visibleRail = profile.visibleRailSlots(hiddenSlots: layout.hiddenSlots)
-        let railWidth = CGFloat(profile.railWidth(steps.column))
-        let leftWidth = visibleRail.isEmpty ? width : width - gap - railWidth
-        let wide = !layout.hiddenSlots.contains(SlotID.wide.rawValue)
-        let wideHeight = CGFloat(profile.height(.wide, step: steps.main))
-        let calendarHeight = wide ? height - gap - wideHeight : height
-        var result = BoardLayoutGeometry(contentSize: viewport, calendar: CGRect(x: pad, y: pad, width: leftWidth, height: calendarHeight), effectiveSteps: steps, profile: profile)
-        if wide { result.slots[.wide] = CGRect(x: pad, y: pad + calendarHeight + gap, width: leftWidth, height: wideHeight) }
-        let railX = pad + leftWidth + gap
-        var upperEnd = pad
-        for slot in visibleRail where slot != .railBottom {
-            let slotHeight = CGFloat(profile.height(slot, step: steps[slot]))
-            let y = upperEnd == pad ? pad : upperEnd + gap
-            result.slots[slot] = CGRect(x: railX, y: y, width: railWidth, height: slotHeight)
-            upperEnd = y + slotHeight
+        var result = BoardLayoutGeometry()
+        guard let profile = try? GridGeometryProfile(viewport: LayoutViewport(width: viewport.width, height: viewport.height)) else { return result }
+        result.gridProfile = profile
+        let visible = layout.placements.filter { $0.key == .calendar || !layout.hiddenSlots.contains($0.key.rawValue) }
+        let lastRow = visible.values.map { $0.row + $0.height }.max() ?? 0
+        result.pitchY = CGFloat(profile.pitchY)
+        // Project saved geometry only as far as every visible panel's minimum permits.
+        // The stored grid remains untouched; impossible layouts retain necessary overflow.
+        if viewport.width >= CGFloat(2 * GridGeometryProfile.padding - GridGeometryProfile.gap + Double(GridGeometryProfile.columns) * 52), viewport.height >= 600, lastRow > 0 {
+            let minimumPitch = visible.map { item, rect in
+                CGFloat((item == .calendar ? 13.0 : 4.0) * profile.pitchY) / CGFloat(rect.height)
+            }.max() ?? CGFloat(profile.pitchY)
+            let fitPitch = (viewport.height - CGFloat(2 * GridGeometryProfile.padding - GridGeometryProfile.gap)) / CGFloat(lastRow)
+            result.pitchY = min(CGFloat(profile.pitchY), max(minimumPitch, fitPitch))
         }
-        if visibleRail.contains(.railBottom) {
-            let bottomHeight = CGFloat(profile.height(.railBottom, step: steps.railBottom))
-            result.slots[.railBottom] = CGRect(x: railX, y: pad + height - bottomHeight, width: railWidth, height: bottomHeight)
+        result.contentSize = CGSize(width: max(viewport.width, CGFloat(2 * GridGeometryProfile.padding - GridGeometryProfile.gap) + CGFloat(GridGeometryProfile.columns) * result.pitchX),
+                                    height: max(viewport.height, CGFloat(2 * GridGeometryProfile.padding - GridGeometryProfile.gap) + CGFloat(lastRow) * result.pitchY))
+        if let rect = visible[.calendar] { result.calendar = result.frame(for: rect) }
+        for slot in SlotID.allCases {
+            if let item = GridItemID(rawValue: slot.rawValue), let rect = visible[item] { result.slots[slot] = result.frame(for: rect) }
         }
-        let blank = profile.railBlankHeight(steps: steps, hiddenSlots: layout.hiddenSlots)
-        if !visibleRail.isEmpty, blank > PanelStepProfile.tolerance {
-            let blankY = upperEnd + (visibleRail.contains(.railBottom) && visibleRail.count > 1 ? gap : 0)
-            result.railBlank = CGRect(x: railX, y: blankY, width: railWidth, height: CGFloat(blank))
-        }
-        for split in LayoutSplit.allCases {
-            guard let candidates = try? LayoutStepResolver.candidates(layout: layout, split: split, viewport: viewportValue) else { continue }
-            result.candidates[split] = candidates
-            let position = CGFloat(profile.dividerPosition(split, steps: steps)), hit = NativeSize.dividerHit
-            result.dividers[split] = switch split {
-            case .column: CGRect(x: position - hit / 2, y: pad, width: hit, height: height)
-            case .main: CGRect(x: pad, y: position - hit / 2, width: leftWidth, height: hit)
-            case .rail, .railBottom: CGRect(x: railX, y: position - hit / 2, width: railWidth, height: hit)
-            }
-        }
+        result.profile = try? PanelStepProfile(viewport: LayoutViewport(width: viewport.width, height: viewport.height))
         return result
     }
 }

@@ -45,6 +45,7 @@ enum CountdownEdit: Sendable, Equatable {
 enum LayoutEdit: Sendable, Equatable {
     case select(slot: SlotID, panel: PanelID), setSplit(LayoutSplit, Double?)
     case setStep(LayoutSplit, PanelSizeStep, viewport: LayoutViewport)
+    case place(item: GridItemID, rect: GridRect), dismissMigrationNotice
     case setHidden(slot: SlotID, Bool), reset
 }
 struct SettingsPatch: Sendable, Equatable {

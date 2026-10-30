@@ -96,15 +96,19 @@ enum PanelDomain {
         switch intent {
         case let .selectSlot(slot, panel): select(slot, panel)
         case let .setSlotVisible(slot, visible):
-            if visible { next.layout.hiddenSlots.remove(slot.rawValue) } else { next.layout.hiddenSlots.insert(slot.rawValue) }
+            if visible { do { next.layout = try GridResolver.restore(slot, in: next.layout) } catch { throw PanelDomainError(code: .validationFailed, field: "layout") } }
+            else { next.layout.hiddenSlots.insert(slot.rawValue) }
         case let .setPanelVisible(panel, visible):
             guard BoardLayout.panelNames.contains(panel.rawValue), let slot = next.layout.slots.first(where: { $0.value == panel })?.key else {
                 throw PanelDomainError(code: .panelNotAssigned)
             }
-            if visible { next.layout.hiddenSlots.remove(slot) } else { next.layout.hiddenSlots.insert(slot) }
+            if visible, let id = SlotID(rawValue: slot) { do { next.layout = try GridResolver.restore(id, in: next.layout) } catch { throw PanelDomainError(code: .validationFailed, field: "layout") } }
+            else if !visible { next.layout.hiddenSlots.insert(slot) }
         case .revealAgenda:
             let slot = next.layout.slots.first(where: { $0.value == .today }).flatMap { SlotID(rawValue: $0.key) } ?? .railTop
-            select(slot, .today); next.layout.hiddenSlots.remove(slot.rawValue); revealed = slot
+            select(slot, .today)
+            do { next.layout = try GridResolver.restore(slot, in: next.layout) } catch { throw PanelDomainError(code: .validationFailed, field: "layout") }
+            revealed = slot
         case .resetLayout:
             next.layout.resetSizes()
         case let .createSubscription(input):

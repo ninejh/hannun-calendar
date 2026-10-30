@@ -2,29 +2,39 @@
 
 [English](README.md)
 
-Mac에서 달력과 프로젝트, 메모, 할 일, 정기 결제, 세계 시계, 집중 타이머 패널을 함께 보는 앱입니다. macOS에 연결된 캘린더는 EventKit을 통해 사용하며 보드 데이터는 Mac에 저장됩니다. [MIT 라이선스](LICENSE)를 따릅니다.
+Mac 바탕화면에서 일정과 프로젝트, 메모, 구독, 할 일, 습관, 세계 시계, 집중 타이머를 함께 보는 네이티브 캘린더 보드입니다. macOS에 연결된 캘린더는 EventKit을 사용하며 보드 데이터는 이 Mac에 저장됩니다. [MIT 라이선스](LICENSE)를 따릅니다.
 
-달력 옆의 네 칸에 오늘의 일정, 마감, 프로젝트, 빠른 메모, 구독, 할 일, 습관, 세계 시계, 집중 타이머 중 필요한 패널을 고를 수 있습니다. 검토된 정적 다운로드 웹사이트는 공개 저장소 준비 단계에서 `website/`에 별도로 추가합니다. 앱 소스만 내보낸 폴더에는 이 디렉터리가 포함되지 않습니다.
+달력과 네 개의 선택 패널을 자유 격자에서 옮기고 크기를 조절할 수 있습니다. 보드의 빈 배경을 길게 눌러 편집에 들어가고, 편집 중 패널 제목에서 패널을 바꿉니다. 패널 선택과 배치는 로컬에 저장됩니다. 편집 테두리는 움직이지 않으며 일상적인 저장/Undo 안내는 줄이고 부분 저장 설명과 오류는 보존합니다.
 
-## 초기 베타 다운로드
+## 베타 다운로드
 
-릴리스 **v1.0.0-beta.2**: [Hannun-Calendar-arm64.dmg](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.2/Hannun-Calendar-arm64.dmg) · [Hannun-Calendar-arm64.zip](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.2/Hannun-Calendar-arm64.zip). 설치 전에 같은 릴리스의 `SHA256SUMS`로 파일을 확인하세요.
+준비된 릴리스는 Apple Silicon과 macOS 14 이상용 **v1.0.0-beta.3**입니다. 앱과 DMG의 **Developer ID 서명·Apple 공증·티켓 첨부(staple)를 완료**했습니다. ZIP에도 같은 티켓 첨부 앱이 들어 있습니다. 이 배포 파일들의 서명·티켓·Gatekeeper 검사를 통과했습니다. 번들 버전 **1.0**, 빌드 **1**은 그대로이며 릴리스 태그와 SHA-256으로 이번 업데이트를 구별합니다.
 
-이번 베타에는 캘린더 연결 처리와 보드 컨트롤 변경이 포함됩니다. 보고된 캘린더 권한 창 미표시 현상은 실제 환경에서 아직 검증되지 않았고 원인도 확정되지 않았습니다. 모든 계정에서 캘린더 연결이 된다고 주장하지 않습니다. 초기 베타로서 모든 macOS 통합 동작이나 전체 수용 테스트 통과를 주장하지 않습니다.
+[릴리스 노트](https://github.com/ninejh/hannun-calendar/releases/tag/v1.0.0-beta.3) · [DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/Hannun-Calendar-arm64.zip) · [체크섬](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/SHA256SUMS)
 
-## 요구 사항과 빌드
+설치·업데이트 전에 [INSTALL.md](INSTALL.md)를 확인하세요. 마지막 로컬 설치 증거에는 캘린더 접근·권한 문제가 남아 있습니다. 모든 계정·OS 조합의 연결, 깨끗한 계정의 첫 실행, 알림·로그인 항목 권한 및 업그레이드를 모두 별도 검증한 것은 아닙니다. 전체 수용 테스트 통과를 주장하지 않습니다. 중요한 일정과 보드 데이터를 백업하세요. 구버전 앱은 새 배치 형식을 읽지 못할 수 있습니다.
 
-다운로드 베타는 Apple Silicon(arm64), macOS 14 이상을 대상으로 합니다. 빌드에는 Swift 6가 포함된 Xcode 또는 Command Line Tools와 Python 3가 필요합니다. 이 폴더에서 실행합니다.
+## 소스 빌드
+
+Apple Silicon Mac, macOS 14 이상, Swift 6, Python 3 및 Xcode 또는 Command Line Tools가 필요합니다. 앱의 외부 패키지 의존성은 없습니다. 이 디렉터리에서 실행합니다.
 
 ```sh
-./scripts/build.sh
+zsh scripts/check.sh
+zsh scripts/build.sh
+```
+
+결과는 `build/Hannun Calendar.app`입니다. 공식 다운로드가 Developer ID 서명되더라도 **로컬 소스 빌드는 ad hoc 서명**됩니다. 배포 서명과 공증은 게시자의 자격 증명이 필요한 별도 단계입니다. 이 소스에는 제품 코드와 빌드 검사가 포함되며 개발용 테스트 자료는 포함되지 않습니다.
+
+가상 데이터 데모가 필요하면 실행 중인 다른 사본을 직접 종료한 뒤 선택적으로 실행합니다.
+
+```sh
 open -n 'build/Hannun Calendar.app' --args --demo
 ```
 
-데모는 가상 일정, 메모리 보드, 가짜 외부 서비스만 사용합니다. 먼저 실행 중인 인스턴스를 종료하세요. 실제 캘린더를 사용하려면 일반 실행 후 캘린더 접근 허용 여부를 선택하세요. 깨끗한 macOS 계정에서 캘린더, 알림, 로그인 항목, 업그레이드, 첫 실행의 모든 동작은 아직 별도 검증되지 않았습니다.
+데모는 가상 일정, 메모리 보드와 가짜 외부 서비스를 사용합니다. 일반 실행은 캘린더 접근 권한을 요청하고 macOS 계정을 사용할 수 있습니다. 선택적인 명령줄 진단 보고서는 build 디렉터리 아래의 절대 경로만 허용합니다. 앱을 build 트리 밖으로 옮긴 경우에는 실행 작업 디렉터리의 `build/`가 진단 경로의 기준입니다.
 
-빌드와 다운로드 베타는 ad hoc 서명만 사용하며 Developer ID 서명이나 공증을 받지 않았습니다. 설치와 Gatekeeper 안내는 [INSTALL.md](INSTALL.md)를 확인하세요.
+## 개인정보와 제공업체
 
-## 개인정보와 데이터 출처
+앱 자체 계정·서버·분석 도구는 없습니다. 로컬 보드 파일은 암호화되지 않습니다. 캘린더 계정 인증·동기화는 macOS가 관리하며 앱에서 일정을 저장하거나 옮기면 원본 일정도 바뀝니다. 선택 기능인 날씨·환율 조회에는 고른 도시 좌표 또는 통화 코드와 일반 연결 정보가 제공업체로 전송됩니다. 설정에서 조회를 끌 수 있습니다. 해당 요청에 일정·메모·구독 이름이나 금액은 보내지 않습니다.
 
-앱 계정과 분석 기능은 없습니다. 로컬 보드 데이터는 암호화되지 않습니다. 선택적 날씨·환율 요청은 선택한 도시의 반올림된 좌표 또는 통화 코드와 일반 네트워크 메타데이터를 제공자에게 보냅니다. 설정에서 요청을 끌 수 있습니다. 날씨: [Open-Meteo](https://open-meteo.com/), [CC BY 4.0 출처 표시](https://creativecommons.org/licenses/by/4.0/), 무료 호스팅의 [비상업적 이용 조건](https://open-meteo.com/en/terms). 환율: ECB 데이터를 사용하는 [Frankfurter](https://frankfurter.dev/)와 [ECB 면책 안내](https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html). 제공자 이용 조건은 앱의 MIT 라이선스와 별개입니다.
+날씨는 [Open-Meteo](https://open-meteo.com/)의 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 데이터를 아이콘으로 요약합니다. 무료 호스팅 API는 [비상업적 이용 조건](https://open-meteo.com/en/terms)을 따릅니다. 환율은 [Frankfurter](https://frankfurter.dev/)의 ECB 데이터를 쓰며 [ECB 안내](https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html)를 따릅니다. 제공업체 약관은 앱의 MIT 라이선스와 별개입니다.

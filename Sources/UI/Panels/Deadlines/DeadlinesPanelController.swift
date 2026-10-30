@@ -114,12 +114,19 @@ private enum DeadlineStepLayout {
                 headerItems[index].interactionRect = headerItems[index].rect
             }
         }
-        if let slot = placement?.slot {
-            headerItems[0] = NativePanelHeader.decorate(headerItems[0], geometry: PanelHeaderGeometry(slot: slot, titleRect: headerItems[0].rect, headerRect: CGRect(x: 0, y: 0, width: width, height: header), excludedRects: headerItems.dropFirst().map(\.hitRect)))
+        if let leading = placement?.editLeading, leading > headerItems[0].rect.minX {
+            let right = headerItems[0].rect.maxX
+            headerItems[0].rect.origin.x = leading; headerItems[0].rect.size.width = max(0, right - leading)
+            headerItems[0].interactionRect = headerItems[0].rect
+        }
+        if let slot = placement?.slot, placement?.editExclusions.isEmpty == false {
+            headerItems[0] = NativePanelHeader.decorate(headerItems[0], geometry: PanelHeaderGeometry(slot: slot, titleRect: headerItems[0].rect, headerRect: CGRect(x: 0, y: 0, width: width, height: header), excludedRects: headerItems.dropFirst().map(\.hitRect) + (placement?.editExclusions ?? []), actionLabel: context.text("slot_menu.title")))
         }
         surface.update(items: headerItems)
         let padding = condensed ? metrics.horizontalPadding : NativeSpace.xs
-        scroll.frame = CGRect(x: padding, y: header, width: max(0, width - padding * 2), height: max(0, surface.bounds.height - header - (condensed ? metrics.bottomPadding : NativeSpace.sm)))
+        let contentTop = max(header, (placement?.editLeading ?? 0) > 0 ? 32 : 0)
+        let contentBottom = max(placement?.editBottom ?? 0, condensed ? metrics.bottomPadding : NativeSpace.sm)
+        scroll.frame = CGRect(x: padding, y: contentTop, width: max(0, width - padding * 2), height: max(0, surface.bounds.height - contentTop - contentBottom))
         if heightStep == .tiny && variant == .tall { scroll.frame.size.height = min(scroll.frame.height, metrics.listRow!.height + (inlineError == nil ? 0 : NativeSize.compactTarget)) }
         let viewport = scroll.contentSize, inset = condensed ? 0 : NativeSpace.sm
         scroll.axis = variant == .wide && condensed ? .horizontal : .vertical

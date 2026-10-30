@@ -181,9 +181,11 @@ import AppKit
     override func layout() {
         super.layout()
         let statusHeight = statusMessage.isEmpty || scrollsStatus ? CGFloat.zero : NativeSize.compactTarget
-        scroll.frame = CGRect(x: horizontalPadding, y: headerHeight + NativeSpace.xxs,
+        let top = max(headerHeight + NativeSpace.xxs, (placement?.editLeading ?? 0) > 0 ? 32 : 0)
+        let bottom = max(bottomInset, placement?.editBottom ?? 0)
+        scroll.frame = CGRect(x: horizontalPadding, y: top,
                               width: max(0, bounds.width - horizontalPadding * 2),
-                              height: max(0, bounds.height - headerHeight - bottomInset - statusHeight - NativeSpace.xxs))
+                              height: max(0, bounds.height - top - bottom - statusHeight))
         scroll.tile()
         let previousSize = scroll.contentSize
         layoutContent()
@@ -198,20 +200,29 @@ import AppKit
         scroll.updateFade()
     }
     func layoutContent() {}
-    func updateHeader(_ items: [NativeRenderItem]) {
-        guard let slot else { update(items: items); return }
-        let excluded = items.filter { !$0.id.hasSuffix(".title") }.map(\.hitRect) + headerExcludedRects
+    func updateHeader(_ original: [NativeRenderItem]) {
+        let leading = placement?.editLeading ?? 0
+        let items = original.map { item -> NativeRenderItem in
+            var item = item
+            if leading > 0, item.rect.minX < leading, item.rect.minY < 32, item.rect.maxY > 4 {
+                let right = item.rect.maxX; item.rect.origin.x = leading; item.rect.size.width = max(0, right - leading)
+                if item.interactionRect != nil { item.interactionRect = item.rect }
+            }
+            return item
+        }
+        guard let slot, placement?.editExclusions.isEmpty == false else { update(items: items); return }
+        let excluded = items.filter { !$0.id.hasSuffix(".title") }.map(\.hitRect) + headerExcludedRects + (placement?.editExclusions ?? [])
         update(items: items.map { item in
             guard item.id == panelPrefix + ".title" else { return item }
             return NativePanelHeader.decorate(item, geometry: PanelHeaderGeometry(slot: slot, titleRect: item.rect,
-                headerRect: CGRect(x: 0, y: 0, width: bounds.width, height: headerHeight), excludedRects: excluded))
+                headerRect: CGRect(x: 0, y: 0, width: bounds.width, height: headerHeight), excludedRects: excluded, actionLabel: context.text("slot_menu.title")))
         })
     }
     func statusItems() -> [NativeRenderItem] {
         guard !statusMessage.isEmpty, !scrollsStatus else { return [] }
         let canRecover = operationFailure.map { $0.retryable || $0.committed == .unknown || $0.code == .boardConflict } ?? false
         let recoveryWidth = canRecover ? (context.text("error.retry_action") as NSString).size(withAttributes: [.font: NativeFont.primary]).width + NativeSpace.lg : 0
-        let y = bounds.height - bottomInset - NativeSize.compactTarget
+        let y = bounds.height - max(bottomInset, placement?.editBottom ?? 0) - NativeSize.compactTarget
         var result = [NativeRenderItem(id: panelPrefix + ".status", rect: CGRect(x: NativeSpace.md, y: y,
                                                                                width: max(0, bounds.width - NativeSpace.xxl - recoveryWidth), height: NativeSize.compactTarget),
                                       label: statusMessage, kind: .text, color: .textQuiet)]
@@ -231,6 +242,7 @@ import AppKit
         return result
     }
     var panelPrefix: String { "panel.editing" }
+    override func panelHeaderTitleMetrics(_ item: NativeRenderItem) -> (font: NSFont, leading: CGFloat) { (NativeFont.sectionHead, NativeSpace.sm) }
     override func paint(_ item: NativeRenderItem) {
         var visible = item
         if item.id.hasSuffix(".add") { visible.label = "+" }

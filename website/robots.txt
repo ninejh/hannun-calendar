@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hannun-calendar.vercel.app/sitemap.xml

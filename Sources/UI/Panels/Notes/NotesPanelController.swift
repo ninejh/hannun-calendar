@@ -15,6 +15,9 @@ enum NotesSaveState: Equatable { case saved, saving, failed, demo }
     private var variant: SlotVariant = .tall
     private var heightStep: PanelSizeStep = .regular
     private var slot: SlotID?
+    private var editLeading: CGFloat = 0
+    private var editBottom: CGFloat = 0
+    private var editExclusions: [CGRect] = []
     private var rendering = false
     private var disposed = false
     private var parked = false
@@ -57,6 +60,7 @@ enum NotesSaveState: Equatable { case saved, saving, failed, demo }
     }
     func setPlacement(_ placement: PanelPlacement) {
         heightStep = placement.heightStep
+        editLeading = placement.editLeading; editBottom = placement.editBottom; editExclusions = placement.editExclusions
         variant = placement.shape == .wide ? .wide : .tall
         setPlacement(slot: placement.slot, variant: variant)
     }
@@ -100,29 +104,31 @@ enum NotesSaveState: Equatable { case saved, saving, failed, demo }
         let headerTop = tiny ? 0 : NativeSpace.sm
         let controlHeight = min(NativeSize.compactTarget, header)
         let inset = metrics.horizontalPadding, usable = max(0, width - inset * 2)
+        let titleX = max(inset, editLeading)
         let retryWidth = saveState == .failed ? min(usable / 3, (context.text("error.retry_action") as NSString).size(withAttributes: [.font: NativeFont.toolbar]).width + NativeSpace.lg) : 0
         let statusKey: String
         switch saveState { case .saved: statusKey = "notes.saved"; case .saving: statusKey = "notes.saving"; case .failed: statusKey = "notes.retry"; case .demo: statusKey = "notes.demo_saved" }
         let status = context.text(statusKey)
         let statusWidth = min(usable / 2, (status as NSString).size(withAttributes: [.font: NativeFont.badge]).width + NativeSpace.sm)
         var items = [
-            NativeRenderItem(id: "notes-title", rect: CGRect(x: inset, y: headerTop, width: max(0, usable - statusWidth - retryWidth - NativeSpace.sm), height: controlHeight), label: context.text("notes.title"), kind: .text),
+            NativeRenderItem(id: "notes-title", rect: CGRect(x: titleX, y: headerTop, width: max(0, width - inset - statusWidth - retryWidth - NativeSpace.sm - titleX), height: controlHeight), label: context.text("notes.title"), kind: .text),
             NativeRenderItem(id: "notes-status", rect: CGRect(x: width - inset - retryWidth - statusWidth, y: headerTop, width: statusWidth, height: controlHeight), label: status, kind: .text, color: saveState == .failed ? .danger : .textSecondary)
         ]
         if saveState == .failed {
             items.append(NativeRenderItem(id: "notes-retry", rect: CGRect(x: width - inset - retryWidth, y: headerTop, width: retryWidth, height: controlHeight), label: context.text("error.retry_action"), kind: .button, enabled: !retrying, color: .accentBlue, minimumTarget: controlHeight))
         }
-        if let slot {
+        if let slot, !editExclusions.isEmpty {
             items[0] = NativePanelHeader.decorate(items[0], geometry: PanelHeaderGeometry(slot: slot, titleRect: items[0].rect,
                 headerRect: metrics.regions(in: surface.bounds, headerHeight: header).headerRect,
-                excludedRects: items.filter { $0.id == "notes-status" || $0.id == "notes-retry" }.map(\.hitRect)))
+                excludedRects: items.filter { $0.id == "notes-status" || $0.id == "notes-retry" }.map(\.hitRect) + editExclusions, actionLabel: context.text("slot_menu.title")))
         }
         var errorHeight: CGFloat = 0
         if saveState == .failed, let failure = notesFailure {
             errorHeight = NativeSize.toolbarHeight
-            items.append(NativeRenderItem(id: "notes-error", rect: CGRect(x: inset, y: max(header, height - errorHeight - NativeSpace.xs), width: usable, height: errorHeight), label: context.text(failure.messageKey, values: failure.values), kind: .text, color: .danger))
+            items.append(NativeRenderItem(id: "notes-error", rect: CGRect(x: inset, y: max(header, height - errorHeight - max(NativeSpace.xs, editBottom)), width: usable, height: errorHeight), label: context.text(failure.messageKey, values: failure.values), kind: .text, color: .danger))
         }
-        scroll.frame = CGRect(x: inset, y: header, width: usable, height: max(0, height - header - errorHeight - (tiny ? metrics.bottomPadding : NativeSpace.md)))
+        let contentTop = max(header, editLeading > 0 ? 32 : 0)
+        scroll.frame = CGRect(x: inset, y: contentTop, width: usable, height: max(0, height - contentTop - errorHeight - max(editBottom, tiny ? metrics.bottomPadding : NativeSpace.md)))
         let editor = context.editors.textView
         let text = state.drafts[.notes]?.textValue?.text ?? state.snapshot.board.notes
         if context.editors.key != .notes || editor.superview !== scroll.contentView {
@@ -220,6 +226,7 @@ enum NotesSaveState: Equatable { case saved, saving, failed, demo }
 @MainActor final class NotesPanelView: PanelContainerView {
     var onLayout: (@MainActor () -> Void)?
     var onVisibilityChanged: (@MainActor (Bool) -> Void)?
+    override func panelHeaderTitleMetrics(_ item: NativeRenderItem) -> (font: NSFont, leading: CGFloat) { (NativeFont.sectionHead, NativeSpace.lg + NativeSpace.xs) }
     override func layout() { super.layout(); onLayout?() }
     override func viewDidHide() { super.viewDidHide(); onVisibilityChanged?(true) }
     override func viewDidUnhide() { super.viewDidUnhide(); onVisibilityChanged?(false) }

@@ -20,10 +20,14 @@ import AppKit
     private var inputHeight: CGFloat {
         isCompactStep ? (NativePanelStepMetrics(panel: .todos, shape: stepMetrics.shape, step: stepMetrics.step).listRow?.height ?? NativeSize.compactTarget) : NativeSize.compactTarget
     }
+    private var inputEditOffset: CGFloat {
+        guard isCompactStep, variant != .wide, (placement?.editLeading ?? 0) > 0 else { return 0 }
+        return max(0, 32 - headerRowHeight - NativeSpace.xxs)
+    }
     override var headerHeight: CGFloat {
         if isCompactStep && variant == .wide { return super.headerHeight }
         if tinyRail && !inlineInputExpanded { return super.headerHeight }
-        return super.headerHeight + (isCompactStep ? inputHeight : NativeSize.toolbarHeight) + NativeSpace.xs
+        return super.headerHeight + (isCompactStep ? inputHeight : NativeSize.toolbarHeight) + NativeSpace.xs + inputEditOffset
     }
     override var headerExcludedRects: [CGRect] { input.isHidden ? [] : [input.frame] }
     var titleRect: CGRect {
@@ -49,7 +53,7 @@ import AppKit
         if isCompactStep {
             let width = variant == .wide ? max(0, bounds.width / 2 - horizontalPadding) : max(0, bounds.width - horizontalPadding * 2)
             input.frame = CGRect(x: variant == .wide ? bounds.width / 2 : horizontalPadding,
-                y: variant == .wide ? max(0, (headerRowHeight - inputHeight) / 2) : headerRowHeight + NativeSpace.xxs,
+                y: variant == .wide ? max(0, (headerRowHeight - inputHeight) / 2) : headerRowHeight + NativeSpace.xxs + inputEditOffset,
                 width: width, height: inputHeight)
         } else {
             input.frame = CGRect(x: NativeSpace.md, y: NativeSize.toolbarHeight + NativeSpace.md, width: max(0, bounds.width - NativeSpace.xxl), height: NativeSize.compactTarget)
@@ -228,10 +232,10 @@ import AppKit
         let count = snapshot.board.todos.filter(\.completed).count
         let collapsed = snapshot.board.settings.todosCompletedCollapsed
         let collapse = context.text(collapsed ? "todo.expand_done" : "todo.collapse_done", values: ["0": String(count)])
-        let buttonWidth = min(bounds.width * 0.67, (collapse as NSString).size(withAttributes: [.font: NativeFont.primary]).width + NativeSpace.lg)
+        let buttonWidth = count == 0 ? 0 : min(bounds.width * 0.67, (collapse as NSString).size(withAttributes: [.font: NativeFont.primary]).width + NativeSpace.lg)
         let collapseItem = NativeRenderItem(id: "todos.collapse", rect: CGRect(x: bounds.width - NativeSpace.md - buttonWidth, y: NativeSpace.sm, width: buttonWidth, height: NativeSize.toolbarHeight), label: collapse, kind: .button)
         let title = NativeRenderItem(id: "todos.title", rect: isCompactStep ? titleRect : CGRect(x: NativeSpace.md, y: NativeSpace.sm, width: max(0, bounds.width - buttonWidth - NativeSpace.xxl), height: NativeSize.toolbarHeight), label: context.text(titleKey), kind: .text)
-        updateHeader([title] + (isCompactStep ? addItems() : [collapseItem]) + statusItems())
+        updateHeader([title] + (isCompactStep ? addItems() : count == 0 ? [] : [collapseItem]) + statusItems())
         let values = snapshot.board.todos.filter { !$0.completed } + (collapsed ? [] : snapshot.board.todos.filter(\.completed))
         let columns = variant == .wide ? 2 : 1
         let width = scroll.contentSize.width / CGFloat(columns)
@@ -253,7 +257,7 @@ import AppKit
         if values.isEmpty { items.append(NativeRenderItem(id: "todos.empty", rect: CGRect(x: 0, y: NativeSpace.sm, width: scroll.contentSize.width, height: NativeSize.toolbarHeight), label: context.text(snapshot.board.todos.isEmpty ? "todo.empty_new" : "todo.empty"), kind: .text, color: .textQuiet)) }
         var height = CGFloat((values.count + columns - 1) / columns) * (rowHeight + gap) + NativeSpace.sm
         if values.isEmpty { height += NativeSize.toolbarHeight }
-        if isCompactStep {
+        if isCompactStep && count > 0 {
             var item = collapseItem; item.rect = CGRect(x: 0, y: height, width: scroll.contentSize.width, height: NativeSize.compactTarget)
             items.append(item); height = item.rect.maxY + stepMetrics.itemGap
         }

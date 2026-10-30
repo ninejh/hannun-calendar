@@ -206,6 +206,9 @@ enum NativeOperation: Hashable, Sendable {
             case .setSplit(let split, let ratio): text("split"); text(split.rawValue); optional(ratio) { $0.scalar($1) }
             case .setStep(let split, let step, let viewport):
                 text("step"); text(split.rawValue); scalar(step.rawValue); scalar(viewport.width); scalar(viewport.height)
+            case .place(let item, let rect):
+                text("place"); text(item.rawValue); scalar(rect.column); scalar(rect.row); scalar(rect.width); scalar(rect.height)
+            case .dismissMigrationNotice: text("dismissMigrationNotice")
             case .setHidden(let slot, let hidden): text("hidden"); text(slot.rawValue); scalar(hidden)
             case .reset: text("reset")
             }
@@ -296,6 +299,10 @@ enum NativeDelayPhase: Hashable { case execution, observation }
     private var delays: [NativeOperation: [NativeDelayPhase: Int]] = [:]
     private var failures: [NativeOperation: AppFailure] = [:]
     var nextStorageFailure: AppFailure?
+    var snapshotFailuresRemaining = 0
+    func checkSnapshot() throws {
+        if snapshotFailuresRemaining > 0 { snapshotFailuresRemaining -= 1; throw AppFailure(code: .invalidResponse) }
+    }
     func delayNext(_ method: NativeOperation, phase: NativeDelayPhase, milliseconds: Int) throws {
         guard (0...60000).contains(milliseconds) else { throw AppFailure(code: .invalidRequest) }
         delays[method, default: [:]][phase] = milliseconds

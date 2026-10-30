@@ -27,6 +27,7 @@ struct PreviewInverse {
     private var habits: [RecordRestore<Habit>]
     private var cities: [RecordRestore<WorldClockCity>]
     private var layout: (BoardLayout, BoardLayout)?
+    private var gridPlacement: (GridItemID, GridRect, GridRect)?
     private var settings: (BoardSettings, BoardSettings)?
     private var pins: [(String, Bool, Bool)]
     private var hidden: [(String, Bool, Bool)]
@@ -37,7 +38,15 @@ struct PreviewInverse {
         subscriptions = RecordRestore.changes(before.subscriptions, after.subscriptions)
         todos = RecordRestore.changes(before.todos, after.todos); habits = RecordRestore.changes(before.habits, after.habits)
         cities = RecordRestore.changes(before.worldClockCities, after.worldClockCities)
-        layout = before.layout == after.layout ? nil : (before.layout, after.layout)
+        let changedItems = GridItemID.allCases.filter { before.layout.placements[$0] != after.layout.placements[$0] }
+        var beforeWithoutPositions = before.layout, afterWithoutPositions = after.layout
+        beforeWithoutPositions.placements = [:]; afterWithoutPositions.placements = [:]
+        if changedItems.count == 1, beforeWithoutPositions == afterWithoutPositions,
+           let item = changedItems.first, let old = before.layout.placements[item], let new = after.layout.placements[item] {
+            gridPlacement = (item, old, new); layout = nil
+        } else {
+            gridPlacement = nil; layout = before.layout == after.layout ? nil : (before.layout, after.layout)
+        }
         settings = before.settings == after.settings ? nil : (before.settings, after.settings)
         pins = before.pinnedEventKeys.symmetricDifference(after.pinnedEventKeys).map { ($0, before.pinnedEventKeys.contains($0), after.pinnedEventKeys.contains($0)) }
         hidden = before.hiddenCalendarIDs.symmetricDifference(after.hiddenCalendarIDs).map { ($0, before.hiddenCalendarIDs.contains($0), after.hiddenCalendarIDs.contains($0)) }
@@ -61,6 +70,8 @@ struct PreviewInverse {
         for v in todos { v.restore(&board.todos) }
         for v in habits { v.restore(&board.habits) }; for v in cities { v.restore(&board.worldClockCities) }
         if let (before, after) = layout, board.layout == after { board.layout = before }
+        if let (item, before, after) = gridPlacement, board.layout.placements[item] == after,
+           let restored = try? GridResolver.place(item, rect: before, in: board.layout) { board.layout = restored }
         if let (before, after) = settings, board.settings == after { board.settings = before }
         for (id, before, after) in pins where board.pinnedEventKeys.contains(id) == after {
             if before { board.pinnedEventKeys.insert(id) } else { board.pinnedEventKeys.remove(id) }

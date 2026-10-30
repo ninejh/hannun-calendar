@@ -10,6 +10,10 @@ struct PanelPlacement: Equatable, Sendable {
     var frame: CGRect
     var headerRect: CGRect
     var contentRect: CGRect
+    /// Panel-local areas reserved for editing controls, empty outside layout editing.
+    var editExclusions: [CGRect] = []
+    var editLeading: CGFloat { editExclusions.filter { $0.minX < frame.width / 2 && $0.minY < frame.height / 2 }.map(\.maxX).max() ?? 0 }
+    var editBottom: CGFloat { editExclusions.filter { $0.maxX > frame.width / 2 && $0.maxY > frame.height / 2 }.map { frame.height - $0.minY }.max() ?? 0 }
 }
 struct PanelContentRegions: Equatable, Sendable {
     var headerRect: CGRect
@@ -117,6 +121,7 @@ struct PanelHeaderGeometry: Equatable, Sendable {
     var titleRect: CGRect
     var headerRect: CGRect
     var excludedRects: [CGRect]
+    var actionLabel: String = ""
     static func identifier(for slot: SlotID) -> String { "slot.\(slot.rawValue).header" }
     var identifier: String { Self.identifier(for: slot) }
     func contains(_ point: CGPoint) -> Bool {
@@ -125,6 +130,8 @@ struct PanelHeaderGeometry: Equatable, Sendable {
 }
 enum NativePanelHeader {
     static func decorate(_ item: NativeRenderItem, geometry: PanelHeaderGeometry) -> NativeRenderItem {
-        var header = item; header.panelHeader = geometry; return header
+        var header = item; header.panelHeader = geometry
+        header.rect.size.width = max(0, header.rect.width - NativeSpace.lg)
+        return header
     }
 }

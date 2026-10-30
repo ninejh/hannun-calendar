@@ -96,11 +96,18 @@ import Foundation
                 switch value {
                 case .select(let slot, let panel): next = try Self.panel(.selectSlot(slot, panel), board: next, clock: clock, cityIDs: cityIDs)
                 case .setHidden(let slot, let hidden):
-                    if hidden { next.layout.hiddenSlots.insert(slot.rawValue) } else { next.layout.hiddenSlots.remove(slot.rawValue) }
+                    if hidden { next.layout.hiddenSlots.insert(slot.rawValue) }
+                    else { do { next.layout = try GridResolver.restore(slot, in: next.layout) } catch { throw AppFailure(code: .validationFailed, field: .gridLayout(GridItemID(rawValue: slot.rawValue)), messageKey: "error.grid.collision") } }
                 case .reset: next = try panel(.resetLayout, board: next, clock: clock, cityIDs: cityIDs)
-                case .setStep(let split, let step, let viewport):
-                    do { next.layout = try LayoutStepResolver.resolve(layout: next.layout, split: split, step: step, viewport: viewport) }
-                    catch { throw AppFailure(code: .validationFailed, field: .layout(split)) }
+                case .place(let item, let rect):
+                    do { next.layout = try GridResolver.place(item, rect: rect, in: next.layout) }
+                    catch let error as GridValidationError {
+                        let reason: String = switch error { case .hidden: "hidden"; case .bounds: "bounds"; case .minimum: "minimum"; case .collision: "collision"; case .missing: "missing" }
+                        throw AppFailure(code: .validationFailed, field: .gridLayout(item), messageKey: "error.grid." + reason)
+                    }
+                case .dismissMigrationNotice: next.layout.migrationNoticePending = false
+                case .setStep(let split, _, _):
+                    throw AppFailure(code: .validationFailed, field: .layout(split))
                 case .setSplit(let split, _):
                     // Compatibility spelling while consumers migrate; ratios/null are not writable.
                     throw AppFailure(code: .validationFailed, field: .layout(split))
@@ -114,6 +121,15 @@ import Foundation
     private static func panel(_ intent: PanelIntent, board: BoardState, clock: ClockSnapshot, cityIDs: Set<String>) throws -> BoardState {
         do { return try PanelDomain.apply(intent, to: board, now: clock.now, today: clock.today, validCityIDs: cityIDs).state }
         catch let error as PanelDomainError {
+            if error.field == "layout" {
+                let item: GridItemID? = switch intent {
+                case .setSlotVisible(let slot, _): GridItemID(rawValue: slot.rawValue)
+                case .setPanelVisible(let panel, _): board.layout.slots.first(where: { $0.value == panel }).flatMap { GridItemID(rawValue: $0.key) }
+                case .revealAgenda: board.layout.slots.first(where: { $0.value == .today }).flatMap { GridItemID(rawValue: $0.key) } ?? .railTop
+                default: nil
+                }
+                throw AppFailure(code: .validationFailed, field: .gridLayout(item), messageKey: "error.grid.collision")
+            }
             var failure = NativeRuntimeErrors.normalize(error)
             if let raw = error.field, let field = PanelField(rawValue: raw) {
                 let panel: PanelID, id: UUID?
@@ -188,7 +204,28 @@ import Foundation
                 board.eventProjectLinks[key] = old
             }
         }
-        field(\.layout, before: before, after: after)
+        var oldLayout = before.layout
+        let savedLayout = after.layout
+        oldLayout.placements = savedLayout.placements
+        if oldLayout == savedLayout {
+            let placements = GridItemID.allCases.compactMap { item -> (GridItemID, GridRect?, GridRect?)? in
+                let old = before.layout.placements[item], saved = after.layout.placements[item]
+                return old == saved ? nil : (item, old, saved)
+            }
+            if !placements.isEmpty {
+                changes.append { board in
+                    var candidate = board.layout
+                    for (item, old, saved) in placements {
+                        guard let old, let saved, board.layout.placements[item] == saved else { throw AppFailure(code: .boardConflict) }
+                        candidate.placements[item] = old
+                    }
+                    // The final candidate is checked once: transaction members may occupy
+                    // one another's old rects until they are restored together.
+                    do { try candidate.validate() } catch { throw AppFailure(code: .boardConflict) }
+                    board.layout = candidate
+                }
+            }
+        } else { field(\.layout, before: before, after: after) }
         field(\.settings.desktopMode, before: before, after: after); field(\.settings.fontScale, before: before, after: after)
         field(\.settings.opacity, before: before, after: after); field(\.settings.importantOnly, before: before, after: after)
         field(\.settings.showCompletedProjects, before: before, after: after); field(\.settings.appearance, before: before, after: after)
