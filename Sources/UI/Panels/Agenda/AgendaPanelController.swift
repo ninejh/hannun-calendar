@@ -4,6 +4,7 @@ struct AgendaProjection: Equatable {
     var day: DateOnly
     var rows: [EventRecord]
     var next: EventRecord?
+    var todayRows: [EventRecord]
 
     init(state: PresentationState, day: DateOnly? = nil) {
         let snapshot = state.snapshot
@@ -24,7 +25,8 @@ struct AgendaProjection: Equatable {
                 }
         }
         rows = on(self.day)
-        next = on(snapshot.clock.today).first { !$0.item.allDay && $0.item.start >= snapshot.clock.now.date }
+        todayRows = on(snapshot.clock.today)
+        next = todayRows.first { !$0.item.allDay && $0.item.start >= snapshot.clock.now.date }
     }
 }
 
@@ -48,6 +50,8 @@ struct AgendaProjection: Equatable {
     private var editBottom: CGFloat = 0
     private var editExclusions: [CGRect] = []
     private var lastMinute: Int64 = -1
+    private var lastClockDay: DateOnly?
+    private var lastClockZone: String?
     private var disposed = false
     private var parked = false
     private let timeFormatter = DateFormatter()
@@ -70,7 +74,8 @@ struct AgendaProjection: Equatable {
             guard !change.domains.isDisjoint(with: domains) else { return }
             if change.domains == [.clock] {
                 let minute = Int64(self.context.presentation.state.snapshot.clock.now.date.timeIntervalSince1970 / 60)
-                guard minute != self.lastMinute else { return }
+                let clock = self.context.presentation.state.snapshot.clock
+                guard minute != self.lastMinute || clock.today != self.lastClockDay || clock.timeZone != self.lastClockZone else { return }
             }
             self.render()
         })
@@ -105,6 +110,7 @@ struct AgendaProjection: Equatable {
         let previous = projection.day
         projection = AgendaProjection(state: state, day: fixedDay)
         lastMinute = Int64(state.snapshot.clock.now.date.timeIntervalSince1970 / 60)
+        lastClockDay = state.snapshot.clock.today; lastClockZone = state.snapshot.clock.timeZone
         if surface.theme.appearance != state.snapshot.environment.resolvedAppearance { surface.theme = NativeTheme(appearance: state.snapshot.environment.resolvedAppearance) }
         if list.theme.appearance != surface.theme.appearance { list.theme = surface.theme }
         let locale = Locale(identifier: state.snapshot.board.settings.language == .ko ? "ko_KR" : state.snapshot.environment.localeIdentifier)
@@ -171,12 +177,12 @@ struct AgendaProjection: Equatable {
                 headerRect: metrics.regions(in: surface.bounds, headerHeight: header).headerRect,
                 excludedRects: items.filter { $0.id == "agenda-add" || $0.id == "agenda-back-today" }.map(\.hitRect) + editExclusions, actionLabel: context.text("slot_menu.title")))
         }
-        let showNext = fixedDay == nil && (projection.next != nil || !projection.rows.isEmpty)
+        let showNext = fixedDay == nil && !projection.todayRows.isEmpty
         let summaryInScroll = showNext && useSelectedHeader && !wide && heightStep == .tiny
         var scrolledSummary: NativeRenderItem?
         if showNext {
             let next = projection.next
-            let title = next.map { context.text(selected ? "today.next_today_label" : "today.next_label", values: ["0": $0.item.title]) } ?? context.text("today.clear")
+            let title = next.map { context.text(selected ? "today.next_today_label" : "today.next_label", values: ["0": $0.item.title]) } ?? context.text("today.no_more_timed")
             let remaining = next.map { max(0, Int(ceil($0.item.start.timeIntervalSince(state.snapshot.clock.now.date) / 60))) } ?? 0
             let time = next.map { remaining < 60 ? context.text("today.in_minutes", values: ["0": String(remaining)]) : context.text("today.at_time", values: ["0": timeFormatter.string(from: $0.item.start)]) } ?? ""
             let summaryX = !summaryInScroll && header + NativeSpace.xs < 32 ? titleX : inset
