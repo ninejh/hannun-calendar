@@ -1098,7 +1098,15 @@ import AppKit
         feedback.layer?.backgroundColor = feedback.theme.color(.toastBg).cgColor
         let error = state.lastError ?? layoutFailure ?? state.snapshot.storageWarning
         if let error {
-            var message = context.text(error.messageKey, values: error.values)
+            let messageKey: String
+            if error.messageKey == "error.generic" {
+                messageKey = switch error.code {
+                case .calendarPermission: "error.calendar_permission"
+                case .calendarUnavailable: "error.calendar_unavailable"
+                default: error.messageKey
+                }
+            } else { messageKey = error.messageKey }
+            var message = context.text(messageKey, values: error.values)
             // Presentation retains partial success while independent non-undoable
             // work settles. Preserve both messages without guessing error provenance.
             if let toast = state.toast, toast.messageKey == "error.partial_eventkit" {

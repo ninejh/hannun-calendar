@@ -15,6 +15,7 @@ import Foundation
         var feedback: PresentationFeedback? = nil
         var previousPreference: Bool? = nil
         var focusAdmittedAt: Instant? = nil
+        var calendarReadOrder: Int? = nil
         // Only native-generated scheduling nonces touched by this projection; never a board cache.
         var projectionSchedules: [UUID: UUID] = [:]
     }
@@ -47,6 +48,14 @@ import Foundation
     private var notesGeneration = 0
     private var disposed = false
     private var seenActions: [UUID] = []
+    private struct CalendarReadError {
+        var order: Int
+        var canRetire: Bool
+        var previousError: AppFailure?
+    }
+    private var calendarReadOrder = 0
+    private var successfulCalendarReadOrder = 0
+    private var calendarReadError: CalendarReadError?
     /// Diagnostic count has no payload exposure; recovery/unknown are deliberately included.
     var retainedIntentCount: Int { entries.count + recovery.count }
 
@@ -60,10 +69,10 @@ import Foundation
     /// Initial read has no mutation handle; the composition root can await this before UI ready.
     @discardableResult func load(_ range: DisplayRange?) async -> CommandReceipt {
         guard !disposed else { return .failure(AppFailure(code: .staleSession), snapshot: nil) }
-        state.activity.loading = true; state.lastError = nil; publish([.activity, .error])
+        state.activity.loading = true; setError(nil); publish([.activity, .error])
         let receipt = await application.load(range)
         if let snapshot = receipt.snapshot { accept(snapshot) } else { accept(application.current) }
-        if case .failure(let failure, _) = receipt { state.lastError = failure }
+        if case .failure(let failure, _) = receipt { setError(failure) }
         state.activity.loading = false; rebuild(); publish([.activity, .board, .calendar, .error])
         return receipt.compact
     }
@@ -97,9 +106,9 @@ import Foundation
                 do { try GridResolver.validate(item, rect: rect, in: state.snapshot.board.layout) }
                 catch let error as GridValidationError {
                     let reason: String = switch error { case .hidden: "hidden"; case .bounds: "bounds"; case .minimum: "minimum"; case .collision: "collision"; case .missing: "missing" }
-                    state.lastError = AppFailure(code: .validationFailed, field: .gridLayout(item), messageKey: "error.grid." + reason)
+                    setError(AppFailure(code: .validationFailed, field: .gridLayout(item), messageKey: "error.grid." + reason))
                     publish([.error]); return nil
-                } catch { state.lastError = AppFailure(code: .validationFailed); publish([.error]); return nil }
+                } catch { setError(AppFailure(code: .validationFailed)); publish([.error]); return nil }
                 if state.snapshot.board.layout.placements[item] == rect { return nil }
             }
             let feedback = recovery[i].feedback
@@ -138,7 +147,7 @@ import Foundation
         clearStepPreview(); rebuild()
         let layout = state.snapshot.board.layout
         guard let candidates = try? LayoutStepResolver.candidates(layout: layout, split: split, viewport: viewport) else {
-            state.lastError = AppFailure(code: .validationFailed); publish([.board, .view, .error]); return
+            setError(AppFailure(code: .validationFailed)); publish([.board, .view, .error]); return
         }
         stepCandidates = candidates; stepCandidateBase = layout
         state.view.stepPreview = LayoutStepPreview(split: split, viewport: viewport, startingLayout: layout, step: layout.steps[split], layout: layout)
@@ -179,6 +188,10 @@ import Foundation
     }
     private func month(of day: DateOnly) -> DateOnly { DateOnly(String(format: "%04d-%02d-01", day.year, day.month))! }
     private func submit(_ originalCommand: BoardCommand, feedback explicitFeedback: PresentationFeedback? = nil, fallbackAgenda: (DateOnly, PresentationAnchor?)? = nil, notesGeneration: Int? = nil, didEndStepPreview: Bool = false) -> OperationHandle? {
+        // Calendar and accounts share the same permission request, even in one turn.
+        if case .connect = originalCommand, let active = entries.first(where: { if case .connect = $0.command { true } else { false } }) {
+            return handles[active.id]
+        }
         var endedStepPreview = didEndStepPreview
         var command = originalCommand
         if case .edit(let edit, _) = command, BoardPreview.resizesLayout(edit) {
@@ -195,7 +208,7 @@ import Foundation
             command = .edit(edit, undoable: false)
         }
         guard entries.count < Self.pendingLimit else {
-            state.lastError = AppFailure(code: .busyRetry, messageKey: "error.busy_retry", retryable: true)
+            setError(AppFailure(code: .busyRetry, messageKey: "error.busy_retry", retryable: true))
             publish(endedStepPreview ? [.board, .view, .error] : [.error]); return nil
         }
         let id = UUID(), context = OperationContext(id: id, sessionID: base.sessionID, baseRevision: base.boardRevision)
@@ -237,8 +250,13 @@ import Foundation
         }
         let focusAdmittedAt: Instant?
         if case .focus = command { focusAdmittedAt = base.clock.now } else { focusAdmittedAt = nil }
-        entries.append(Entry(id: id, command: command, affected: affected, notesGeneration: notesGeneration, fallbackAgenda: fallbackAgenda, feedback: feedback, previousPreference: previousPreference, focusAdmittedAt: focusAdmittedAt, projectionSchedules: projectionSchedules))
-        state.lastError = nil; rebuild()
+        let readOrder: Int?
+        switch command {
+        case .connect, .refresh: calendarReadOrder += 1; readOrder = calendarReadOrder
+        default: readOrder = nil
+        }
+        entries.append(Entry(id: id, command: command, affected: affected, notesGeneration: notesGeneration, fallbackAgenda: fallbackAgenda, feedback: feedback, previousPreference: previousPreference, focusAdmittedAt: focusAdmittedAt, calendarReadOrder: readOrder, projectionSchedules: projectionSchedules))
+        setError(nil); rebuild()
         // Application ledger admission occurs in this same turn, before any await.
         let handle = application.submit(command, context: context); handles[id] = handle
         watch(handle)
@@ -269,12 +287,44 @@ import Foundation
             // Only proven non-admission is safe to offer as a new explicit retry.
             settle(id, receipt: .failure(AppFailure(code: .busyRetry, retryable: true), snapshot: nil))
         case .success(.retired):
-            state.lastError = AppFailure(code: .requestRetired, committed: .unknown)
+            setError(AppFailure(code: .requestRetired, committed: .unknown))
             publish([.error]) // Re-read can update base but cannot prove an EventKit create did not happen.
-        case .failure(let error): state.lastError = error; publish([.error])
+        case .failure(let error): setError(error); publish([.error])
         case .success(.pending): break
         }
         return result
+    }
+    private func setError(_ error: AppFailure?) {
+        state.lastError = error; calendarReadError = nil
+    }
+    private func receiveFailure(_ error: AppFailure, from entry: Entry) {
+        guard let order = entry.calendarReadOrder, error.committed == .no,
+              error.code == .calendarUnavailable || error.code == .calendarPermission else {
+            setError(error); return
+        }
+        // Keep the latest read failure even when an older operation settles last.
+        if let current = calendarReadError, current.order > order { return }
+        // Only the reproduced retryable read/connect failure is eligible. Writes,
+        // warnings, unknown outcomes and explicit unrelated message keys never are.
+        let canRetire = error.code == .calendarUnavailable && error.retryable &&
+            (error.messageKey == "error.generic" || error.messageKey == "error.calendar_unavailable")
+        if canRetire, order < successfulCalendarReadOrder { return }
+        let previousError: AppFailure?
+        if let current = calendarReadError { previousError = current.previousError }
+        else { previousError = state.lastError }
+        setError(error)
+        calendarReadError = CalendarReadError(order: order, canRetire: canRetire, previousError: previousError)
+    }
+    private func receiveCalendarSuccess(_ result: CommandResult, from entry: Entry) {
+        guard let order = entry.calendarReadOrder, base.calendarAuthorization == .authorized,
+              base.calendarRefreshedAt != nil else { return }
+        switch result { case .connected, .refreshed: break; default: return }
+        successfulCalendarReadOrder = max(successfulCalendarReadOrder, order)
+        if let error = calendarReadError, error.canRetire, error.order < successfulCalendarReadOrder {
+            // Restore an independent failure that the superseded read temporarily
+            // covered, including an event-write or partial-success warning.
+            setError(error.previousError)
+        }
     }
     private func settle(_ id: UUID, receipt: CommandReceipt) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
@@ -283,7 +333,7 @@ import Foundation
         var entry = entries[i]
         switch receipt {
         case .failure(let error, _):
-            state.lastError = error; entry.failure = error
+            receiveFailure(error, from: entry); entry.failure = error
             if error.committed == .unknown {
                 entries[i].phase = .unknown; entries[i].failure = error
                 rebuild(); publish([.pending, .error], affected: Set(entry.affected)); return
@@ -295,6 +345,7 @@ import Foundation
             }
             if let (day, anchor) = entry.fallbackAgenda { state.view.overlay = .agenda(day, anchor) }
         case .success(let result, _):
+            receiveCalendarSuccess(result, from: entry)
             if case .edit(.notes(let saved), _) = entry.command,
                entry.notesGeneration == notesGeneration, state.drafts[.notes]?.textValue?.text == saved { state.drafts.removeValue(forKey: .notes) }
             if state.toast?.source == id {
@@ -307,11 +358,11 @@ import Foundation
                 }
             }
             if case .eventSaved(let saved) = result {
-                state.lastError = saved.warning
+                setError(saved.warning)
                 for i in entries.indices where entries[i].undoSource == id { entries[i].eventInverse?.after = saved.savedEvent }
             }
             if case .notification(let result) = result, entry.previousPreference == result.enabled, state.toast?.source == id { state.toast = nil; undoPreview = nil }
-            if case .undone(let result) = result { state.lastError = result.warning }
+            if case .undone(let result) = result { setError(result.warning) }
         }
         entries.removeAll { $0.id == id }; handles.removeValue(forKey: id)
         if let source = entry.undoSource, undoPreview?.source == source {
@@ -387,7 +438,7 @@ import Foundation
         if let notes = state.drafts[.notes]?.textValue { state.snapshot.board.notes = notes.text }
         state.pending = entries.map { PendingOperation(id: $0.id, kind: $0.undoSource == nil ? "command" : "undo", phase: $0.phase, affected: $0.affected) }
         state.activity.saving = entries.contains { !$0.affected.isEmpty }
-        state.activity.refreshing = entries.contains { if case .refresh = $0.command { true } else { false } }
+        state.activity.refreshing = entries.contains { switch $0.command { case .refresh, .connect: true; default: false } }
     }
     private func scheduleNotes() {
         notesTimer?.cancel()
@@ -418,7 +469,7 @@ import Foundation
         // A refused admission is not a durable save, even if the native store itself flushes.
         if state.drafts[.notes] != nil {
             let failure = AppFailure(code: .busyRetry, field: .notes, messageKey: "notes.saving", retryable: true)
-            state.lastError = failure; publish([.error], affected: [.notes])
+            setError(failure); publish([.error], affected: [.notes])
             return .failure(failure, snapshot: nil)
         }
         return await application.flush()

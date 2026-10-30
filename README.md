@@ -8,11 +8,11 @@ Move and resize the calendar and four configurable panels on a free grid. Hold a
 
 ## Beta download
 
-The prepared release is **v1.0.0-beta.3**, for Apple Silicon and macOS 14 or later. The app and DMG are **Developer ID signed, Apple notarized and stapled**. The ZIP contains the same stapled app. Signature, ticket and Gatekeeper checks passed for these exact artifacts. The app's bundle version remains **1.0**, build **1**; the release tag and SHA-256 identify this update.
+The prepared release is **v1.0.0-beta.4**, for Apple Silicon and macOS 14 or later. The app and DMG are **Developer ID signed, Apple notarized and stapled**. The ZIP contains the same stapled app. Strict signature, ticket and Gatekeeper checks passed for these exact artifacts. Bundle version **1.0**, build **1** remain unchanged.
 
-[Release notes](https://github.com/ninejh/hannun-calendar/releases/tag/v1.0.0-beta.3) · [DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/Hannun-Calendar-arm64.zip) · [Checksums](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/SHA256SUMS)
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/SHA256SUMS)
 
-See [INSTALL.md](INSTALL.md) before installing or upgrading. A reported calendar-access/permission problem remains unresolved in the last local-install evidence. Calendar connections, clean-account first launch, notification/login-item permissions, upgrades, and every account/OS combination have not all been independently verified. This beta does not claim full acceptance-test coverage. Back up important calendar and board data; older apps may not read the new layout format.
+This candidate distinguishes an unconnected calendar from an actual failure. It avoids treating initial navigation as permission denial and keeps connection explicit. Permission-denied, restricted, temporarily unavailable and genuine storage errors remain distinct. Synthetic tests do not establish resolution of the reported issue on a real account. Real EventKit connectivity, clean-account first launch, physical keyboard/VoiceOver, installation and user-data upgrades remain unverified. See [INSTALL.md](INSTALL.md).
 
 ## Build from source
 
@@ -31,7 +31,7 @@ For an optional fictional-data demo, quit another running copy deliberately and 
 open -n 'build/Hannun Calendar.app' --args --demo
 ```
 
-Demo mode uses fictional events, an in-memory board and fake external adapters. A normal launch can request calendar access and use macOS-connected calendars. Optional command-line diagnostic report output must be an absolute descendant of the build directory; when an app is moved outside a build tree, its diagnostic fallback is the chosen working directory's `build/` folder.
+Demo mode uses fictional events, an in-memory board and fake external adapters. Choose Connect Calendar explicitly to request access to macOS-connected calendars. Optional command-line diagnostic report output must be an absolute descendant of the build directory; when an app is moved outside a build tree, its diagnostic fallback is the chosen working directory's `build/` folder.
 
 ## Privacy and data providers
 

@@ -8,11 +8,11 @@ Mac 바탕화면에서 일정과 프로젝트, 메모, 구독, 할 일, 습관, 
 
 ## 베타 다운로드
 
-준비된 릴리스는 Apple Silicon과 macOS 14 이상용 **v1.0.0-beta.3**입니다. 앱과 DMG의 **Developer ID 서명·Apple 공증·티켓 첨부(staple)를 완료**했습니다. ZIP에도 같은 티켓 첨부 앱이 들어 있습니다. 이 배포 파일들의 서명·티켓·Gatekeeper 검사를 통과했습니다. 번들 버전 **1.0**, 빌드 **1**은 그대로이며 릴리스 태그와 SHA-256으로 이번 업데이트를 구별합니다.
+Apple Silicon과 macOS 14 이상용 준비된 릴리스는 **v1.0.0-beta.4**입니다. 앱과 DMG의 **Developer ID 서명·Apple 공증·티켓 첨부**를 완료했습니다. ZIP에도 같은 티켓 첨부 앱이 들어 있으며 이 정확한 파일의 서명·티켓·Gatekeeper 검사를 통과했습니다. 번들 버전 **1.0**, 빌드 **1**은 그대로입니다.
 
-[릴리스 노트](https://github.com/ninejh/hannun-calendar/releases/tag/v1.0.0-beta.3) · [DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/Hannun-Calendar-arm64.zip) · [체크섬](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.3/SHA256SUMS)
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.4/SHA256SUMS)
 
-설치·업데이트 전에 [INSTALL.md](INSTALL.md)를 확인하세요. 마지막 로컬 설치 증거에는 캘린더 접근·권한 문제가 남아 있습니다. 모든 계정·OS 조합의 연결, 깨끗한 계정의 첫 실행, 알림·로그인 항목 권한 및 업그레이드를 모두 별도 검증한 것은 아닙니다. 전체 수용 테스트 통과를 주장하지 않습니다. 중요한 일정과 보드 데이터를 백업하세요. 구버전 앱은 새 배치 형식을 읽지 못할 수 있습니다.
+최초 미연결 상태와 실제 오류를 구분하고, 연결 전 탐색을 권한 거부 오류로 취급하지 않으며 명시적인 연결 동작을 유지합니다. 권한 거부·제한·일시 불가와 실제 저장 오류는 구분해 유지합니다. 합성 테스트만으로 실제 계정에서 보고된 문제가 해결됐다고 주장하지 않습니다. 실제 EventKit 연결, 깨끗한 계정 첫 실행, 물리 키보드·VoiceOver, 설치·사용자 데이터 업그레이드는 미검증입니다. [INSTALL.md](INSTALL.md)를 확인하세요.
 
 ## 소스 빌드
 
@@ -31,7 +31,7 @@ zsh scripts/build.sh
 open -n 'build/Hannun Calendar.app' --args --demo
 ```
 
-데모는 가상 일정, 메모리 보드와 가짜 외부 서비스를 사용합니다. 일반 실행은 캘린더 접근 권한을 요청하고 macOS 계정을 사용할 수 있습니다. 선택적인 명령줄 진단 보고서는 build 디렉터리 아래의 절대 경로만 허용합니다. 앱을 build 트리 밖으로 옮긴 경우에는 실행 작업 디렉터리의 `build/`가 진단 경로의 기준입니다.
+데모는 가상 일정, 메모리 보드와 가짜 외부 서비스를 사용합니다. 캘린더 연결 버튼을 명시적으로 선택해 macOS 캘린더 접근 권한을 요청합니다. 선택적인 명령줄 진단 보고서는 build 디렉터리 아래의 절대 경로만 허용합니다. 앱을 build 트리 밖으로 옮긴 경우에는 실행 작업 디렉터리의 `build/`가 진단 경로의 기준입니다.
 
 ## 개인정보와 제공업체
 

@@ -314,8 +314,15 @@ struct NativeViewportStateFile: BoardPersistence {
                 let code = AppFailureCode(rawValue: error) ?? .calendarUnavailable
                 throw AppFailure(code: code, messageKey: "error." + code.rawValue.lowercased(), retryable: true)
             }
-            if !calendars.authorized && !calendars.demo {
-                throw AppFailure(code: .calendarPermission, messageKey: "error.calendar_permission")
+            if !calendars.authorized {
+                switch calendars.accessState {
+                case .notDetermined: break // Range synchronization before first connection is normal.
+                case .denied, .restricted, .writeOnly:
+                    if sources { throw AppFailure(code: .calendarPermission, messageKey: "error.calendar_permission") }
+                case .unavailable:
+                    throw AppFailure(code: .calendarUnavailable, messageKey: "error.calendar_unavailable", retryable: true)
+                case .fullAccess: break
+                }
             }
             adoptCalendarRefresh(capture)
             return .refreshed
@@ -323,7 +330,10 @@ struct NativeViewportStateFile: BoardPersistence {
             let capture = try await captureCalendarRefresh {
                 try await calendars.connect(ranges: ranges, now: preferences.now)
             }
-            guard calendars.authorized else { throw AppFailure(code: .calendarPermission, messageKey: "error.calendar_permission") }
+            guard calendars.authorized else {
+                if calendars.accessState.denied { throw AppFailure(code: .calendarPermission, messageKey: "error.calendar_permission") }
+                throw AppFailure(code: .calendarUnavailable, messageKey: "error.calendar_unavailable", retryable: true)
+            }
             if let error = calendars.error {
                 let code = AppFailureCode(rawValue: error) ?? .calendarUnavailable
                 throw AppFailure(code: code, messageKey: "error." + code.rawValue.lowercased(), retryable: true)

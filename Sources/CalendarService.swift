@@ -277,7 +277,7 @@ final class CalendarService: ObservableObject {
         return true
     }
     func refresh(ranges: [QueryRange], now: Date, refreshSources: Bool, explicitUserRefresh: Bool) async {
-        guard explicitUserRefresh, refreshSources, demo, syntheticStore == nil else {
+        guard explicitUserRefresh, refreshSources, demo, syntheticStore == nil, worker == nil else {
             await refresh(ranges: ranges, now: now, refreshSources: refreshSources); return
         }
         let staged = stagedSyntheticEvents
@@ -294,26 +294,22 @@ final class CalendarService: ObservableObject {
         guard let worker else { return }
         let granted: Bool
         do { granted = try await worker.requestAccess() }
-        catch {
-            let access = await worker.authorization()
-            accessState = access; authorized = access.authorized; denied = access.denied
-            if !authorized { records = []; retained = [:]; calendars = []; defaultCalendarID = nil }
-            if access.denied { throw NativeFailure(code: "CALENDAR_PERMISSION") }
-            throw NativeFailure(code: "CALENDAR_UNAVAILABLE", retryable: true)
-        }
-        guard granted else {
-            let access = await worker.authorization()
-            generation += 1; loading = false
-            accessState = access; authorized = access.authorized; denied = access.denied
-            records = []; retained = [:]; calendars = []; defaultCalendarID = nil
-            throw NativeFailure(code: "CALENDAR_PERMISSION")
-        }
+        catch { throw await connectionFailure(worker) }
+        guard granted else { throw await connectionFailure(worker) }
         switch await refreshResult(ranges: ranges, now: now) {
         case .adopted: return
-        case .permission: throw NativeFailure(code: "CALENDAR_PERMISSION")
+        case .permission:
+            throw NativeFailure(code: accessState.denied ? "CALENDAR_PERMISSION" : "CALENDAR_UNAVAILABLE", retryable: !accessState.denied)
         case .failed(let code): throw NativeFailure(code: code, retryable: true)
         case .superseded: throw NativeFailure(code: "CALENDAR_UNAVAILABLE", retryable: true)
         }
+    }
+    private func connectionFailure(_ worker: any CalendarWorkerProtocol) async -> NativeFailure {
+        let access = await worker.authorization()
+        generation += 1; loading = false
+        accessState = access; authorized = access.authorized; denied = access.denied
+        if !authorized { records = []; retained = [:]; calendars = []; defaultCalendarID = nil }
+        return NativeFailure(code: access.denied ? "CALENDAR_PERMISSION" : "CALENDAR_UNAVAILABLE", retryable: !access.denied)
     }
     func find(_ id: String) -> EventRecord? { records.first { $0.id == id } ?? retained[id] }
     func current(_ original: EventRecord, checkVersion: Bool) async throws -> EventRecord {

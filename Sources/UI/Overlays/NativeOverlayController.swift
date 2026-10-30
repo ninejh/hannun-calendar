@@ -66,7 +66,10 @@ import AppKit
     private let notes = NSTextView(frame: .zero)
     private let notesScroll = OverflowScrollView(frame: .zero)
     private(set) var moreDetails = false
-    private(set) var inlineMessage: String?
+    private(set) var inlineMessage: String? {
+        didSet { presentationOwnsInlineFailure = false }
+    }
+    private var presentationOwnsInlineFailure = false
     private(set) var editor: EventOverlayDraft?
     private var searchResults: [OverlaySearchResult] = []
     private var searchIndex = 0
@@ -80,6 +83,7 @@ import AppKit
     private var busy = false
     private var unknownOperation: UUID?
     private var connecting = false
+    private var connectionReturnFocus = false
     private var cityGeneration = 0
     private var cities: [City] = []
     private var cityPickerExpanded = false
@@ -141,11 +145,18 @@ import AppKit
             guard let self else { return }
             if let id = self.unknownOperation, !self.state.pending.contains(where: { $0.id == id }) {
                 self.unknownOperation = nil; self.busy = false
-                if let failure = self.state.lastError { self.showFailure(failure) }
+                if let failure = self.state.lastError { self.showFailure(failure, presentationOwned: true) }
                 else { self.draftCommitted = true; if let key = self.editor?.key { self.context.presentation.clearDraft(key) }; self.requestDismiss() }
             }
-            if change.domains.contains(.error), let failure = self.state.lastError { self.showFailure(failure) }
-            else { self.render() }
+            if change.domains.contains(.error) {
+                if let failure = self.state.lastError { self.showFailure(failure, presentationOwned: true) }
+                else {
+                    // Presentation owns read ordering and restores independent errors.
+                    // Follow its reconciliation without clearing local validation or warnings.
+                    if self.presentationOwnsInlineFailure { self.inlineMessage = nil }
+                    self.render()
+                }
+            } else { self.render() }
         })
         bindExistingPending()
     }
@@ -297,6 +308,14 @@ import AppKit
         content.frame = CGRect(x: 0, y: 0, width: bodyWidth, height: max(y, scroll.contentSize.height))
         content.update(items: renderItems); scroll.updateFade(); registerNativeFocus()
         let isRefreshing = connecting || state.activity.refreshing
+        if connectionReturnFocus, !isRefreshing, !state.activity.loading {
+            connectionReturnFocus = false
+            if context.focus.focusedID == nil, host.window?.firstResponder === content {
+                let authorization = state.snapshot.calendarAuthorization
+                let recoveryID = authorization == .denied || authorization == .restricted ? "overlay.privacy" : "overlay.refresh"
+                context.focus.focus(FocusID(recoveryID))
+            }
+        }
         spinner.strokeColor = theme.color(.textSecondary).cgColor
         let side = NativeSpace.lg
         spinner.frame = CGRect(x: surface.bounds.width - NativeSize.compactTarget * 2 - NativeSpace.sm, y: NativeSpace.md, width: side, height: side)
@@ -327,9 +346,9 @@ import AppKit
             return formatter.string(from: day.date(in: zone))
         }
     }
-    private func row(_ id: String, label: String, kind: NativeRenderItem.Kind = .button, enabled: Bool = true, checked: Bool = false, fill: NativeColorToken? = nil, action: (@MainActor () -> Void)? = nil) {
-        renderItems.append(NativeRenderItem(id: id, rect: CGRect(x: 0, y: y, width: bodyWidth, height: NativeSize.compactTarget + NativeSpace.xs), label: label, kind: kind, enabled: enabled, checked: checked, fill: fill, color: fill == .fill ? .toastText : .textPrimary))
-        if let action { itemActions[id] = action }; y += NativeSize.compactTarget + NativeSpace.sm
+    private func row(_ id: String, label: String, kind: NativeRenderItem.Kind = .button, enabled: Bool = true, checked: Bool = false, fill: NativeColorToken? = nil, height: CGFloat = NativeSize.compactTarget + NativeSpace.xs, action: (@MainActor () -> Void)? = nil) {
+        renderItems.append(NativeRenderItem(id: id, rect: CGRect(x: 0, y: y, width: bodyWidth, height: height), label: label, kind: kind, enabled: enabled, checked: checked, fill: fill, color: fill == .fill ? .toastText : .textPrimary))
+        if let action { itemActions[id] = action }; y += height + NativeSpace.xs
     }
     private func paragraph(_ id: String, _ value: String, color: NativeColorToken = .textSecondary) {
         let attrs = NativeFont.attributes(font: NativeFont.body, color: content.theme.color(color), truncation: .byWordWrapping)
@@ -437,7 +456,7 @@ import AppKit
         let snapshot = state.snapshot
         paragraph("overlay.calendar.count", text("accounts.count", ["0": String(snapshot.calendar.calendars.count)]) + " · " + (snapshot.board.hiddenCalendarIDs.isEmpty ? text("accounts.all_shown") : text("accounts.hidden", ["0": String(snapshot.board.hiddenCalendarIDs.count)])))
         if let refreshedAt = snapshot.calendarRefreshedAt { let formatter = DateFormatter(); formatter.timeStyle = .short; paragraph("overlay.updated", text("accounts.updated", ["0": formatter.string(from: refreshedAt)])) }
-        if snapshot.calendar.calendars.isEmpty { paragraph("overlay.calendar.empty", text("accounts.empty")) }
+        if snapshot.calendar.calendars.isEmpty, snapshot.calendarAuthorization == .authorized { paragraph("overlay.calendar.empty", text("accounts.empty")) }
         var account: String?
         for calendar in snapshot.calendar.calendars.sorted(by: { ($0.account, $0.title, $0.id) < ($1.account, $1.title, $1.id) }) {
             if account != calendar.account { row("overlay.account." + calendar.id, label: calendar.account, kind: .text); account = calendar.account }
@@ -445,17 +464,19 @@ import AppKit
             let count = snapshot.calendar.records.filter { $0.item.calendarID == calendar.id }.count
             paragraph("overlay.calendar.meta." + calendar.id, text("accounts.in_view", ["0": String(count)]) + (calendar.writable ? "" : " · " + text("calendar.readonly")))
         }
-        let isRefreshing = connecting || state.activity.refreshing
+        let isRefreshing = connecting || state.activity.loading || state.activity.refreshing
         let authorization = snapshot.calendarAuthorization
         let recovery = authorization == .denied || authorization == .restricted
         if recovery {
             paragraph("overlay.permission", text(authorization == .denied ? "banner.permission_denied" : "banner.permission_restricted"))
-            row("overlay.privacy", label: text("banner.open_system_settings"))
+            row("overlay.privacy", label: text("banner.open_system_settings"), enabled: !isRefreshing, height: 44)
         } else {
+            if authorization == .notDetermined { paragraph("overlay.permission", text("banner.connect")) }
             if authorization == .writeOnly { paragraph("overlay.permission", text("banner.permission_write_only")) }
             if authorization == .unavailable { paragraph("overlay.permission", text("banner.permission_unavailable")) }
             let action: String = switch authorization { case .authorized: "accounts.refresh"; case .writeOnly: "accounts.upgrade_access"; case .unavailable: "accounts.retry"; default: "accounts.connect" }
-            row("overlay.refresh", label: text(isRefreshing ? (connecting ? (authorization == .unavailable ? "accounts.retrying" : "accounts.connecting") : "accounts.refreshing") : action), enabled: !isRefreshing)
+            let progress: String = switch authorization { case .notDetermined, .writeOnly: "accounts.connecting"; case .unavailable: "accounts.retrying"; default: "accounts.refreshing" }
+            row("overlay.refresh", label: text(isRefreshing ? progress : action), enabled: !isRefreshing, height: 44)
         }
         row("overlay.accounts", label: text("accounts.manage"))
     }
@@ -657,8 +678,9 @@ import AppKit
         }
     }
     private func refresh() {
-        guard !connecting && !state.activity.refreshing else { return }
-        let isConnect = state.snapshot.calendarAuthorization != .authorized
+        guard !connecting && !state.activity.loading && !state.activity.refreshing else { return }
+        let isConnect = state.snapshot.calendarAuthorization == .notDetermined || state.snapshot.calendarAuthorization == .writeOnly
+        connectionReturnFocus = context.focus.focusedID == FocusID("overlay.refresh")
         if isConnect { connecting = true; render() }
         let command: BoardCommand = isConnect ? .connect : .refresh(OverlaySettings.range(state), refreshSources: true)
         if !perform(command, completed: { [weak self] _ in
@@ -673,14 +695,19 @@ import AppKit
         Task { [weak self] in
             let receipt = await handle.settled.value
             guard let self, !self.disposed else { return }
-            if case .failure(let failure, _) = receipt { self.showFailure(failure) }
+            // Read/connect failures are projected by the subscription above. A late
+            // receipt must not resurrect an error retired by a newer calendar read.
+            switch command {
+            case .connect, .refresh: break
+            default: if case .failure(let failure, _) = receipt { self.showFailure(failure) }
+            }
             completed?(receipt)
         }
         return true
     }
-    private func showFailure(_ failure: AppFailure) {
+    private func showFailure(_ failure: AppFailure, presentationOwned: Bool = false) {
         let key = failure.code == .commitOutcomeUnknown ? "error.transport_unknown" : failure.messageKey == "error.generic" ? "error." + failure.code.rawValue.lowercased() : failure.messageKey
-        inlineMessage = text(key, failure.values); render()
+        inlineMessage = text(key, failure.values); presentationOwnsInlineFailure = presentationOwned; render()
         if !composing, let field = failure.field, case .event(let path) = field {
             let id: String? = switch path { case .title: "title"; case .location: "location"; case .notes: "notes"; case .start: "start"; case .end: "end"; default: nil }
             if let id { context.focus.focus(FocusID("overlay." + id)) }

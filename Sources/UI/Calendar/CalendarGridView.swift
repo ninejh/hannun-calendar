@@ -21,6 +21,7 @@ private struct CalendarRenderKey: Equatable {
     private let context: BoardScreenContext
     private let lifetime = ScreenLifetime()
     private var renderKey: CalendarRenderKey?
+    private var connectionReturnFocus = false
     private(set) var cellRects: [DateOnly: CGRect] = [:]
     private var cellDays: [String: DateOnly] = [:], addDays: [String: DateOnly] = [:], moreDays: [String: DateOnly] = [:]
     private var eventIDs: [String: String] = [:], tints: [String: NativeCalendarTint] = [:]
@@ -122,13 +123,22 @@ private struct CalendarRenderKey: Equatable {
         let weatherEnabled = board.settings.weather.enabled
         let footer = weatherEnabled ? CalendarMetrics.weatherHeight : 0
         let editingBottom: CGFloat = layoutEditing ? 32 : 0
-        let bannerHeight: CGFloat = snapshot.calendarAuthorization == .authorized ? 0 : NativeSize.toolbarHeight + NativeSpace.md
-        if bannerHeight > 0 {
+        var bannerHeight: CGFloat = 0
+        if snapshot.calendarAuthorization != .authorized {
             let authorization = snapshot.calendarAuthorization
             let key: String = switch authorization { case .denied: "banner.permission_denied"; case .restricted: "banner.permission_restricted"; case .writeOnly: "banner.permission_write_only"; case .unavailable: "banner.permission_unavailable"; default: "banner.connect" }
             let action: String = switch authorization { case .denied, .restricted: "banner.open_system_settings"; case .writeOnly: "accounts.upgrade_access"; case .unavailable: "accounts.retry"; default: "accounts.connect" }
-            output.append(NativeRenderItem(id: "calendar.permission", rect: CGRect(x: NativeSpace.xl, y: toolbarBottom, width: max(0, bounds.width - NativeSpace.xl * 2 - NativeSize.popoverWidth / 2), height: bannerHeight), label: context.text(key), kind: .text, color: .textSecondary))
-            output.append(NativeRenderItem(id: "action.connectCalendars", rect: CGRect(x: max(NativeSpace.xl, bounds.width - NativeSize.popoverWidth / 2), y: toolbarBottom + NativeSpace.xs, width: NativeSize.popoverWidth / 2 - NativeSpace.xl, height: NativeSize.toolbarHeight), label: context.text(action), kind: .button, color: .accentBlue))
+            let busy = state.activity.loading || state.activity.refreshing
+            let progress: String = switch authorization { case .notDetermined, .writeOnly: "accounts.connecting"; case .unavailable: "accounts.retrying"; default: action }
+            let label = context.text(busy ? progress : action), message = context.text(key)
+            let actionWidth = max(CGFloat(44), ceil((label as NSString).size(withAttributes: [.font: NativeFont.primary]).width) + 2 * NativeSpace.sm)
+            let messageWidth = max(0, bounds.width - 2 * NativeSpace.xl - actionWidth - NativeSpace.sm)
+            let attributes = NativeFont.attributes(font: NativeFont.primary, color: theme.color(.textSecondary), truncation: .byWordWrapping)
+            let textHeight = (message as NSString).boundingRect(with: CGSize(width: max(1, messageWidth - 2 * NativeSpace.sm), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height
+            let rowHeight = max(CGFloat(44), ceil(textHeight) + 2 * NativeSpace.xs)
+            bannerHeight = rowHeight + NativeSpace.md
+            output.append(NativeRenderItem(id: "calendar.permission", rect: CGRect(x: NativeSpace.xl, y: toolbarBottom, width: messageWidth, height: rowHeight), label: message, kind: .text, color: .textSecondary))
+            output.append(NativeRenderItem(id: "action.connectCalendars", rect: CGRect(x: bounds.width - NativeSpace.xl - actionWidth, y: toolbarBottom + (rowHeight - 44) / 2, width: actionWidth, height: 44), label: label, kind: .button, enabled: !busy, color: .accentBlue))
         }
         let weekdayY = toolbarBottom + bannerHeight
         gridRect = CGRect(x: 0, y: weekdayY + CalendarMetrics.weekdayHeight, width: bounds.width, height: max(0, bounds.height - weekdayY - CalendarMetrics.weekdayHeight - footer - editingBottom))
@@ -212,6 +222,12 @@ private struct CalendarRenderKey: Equatable {
             output.append(NativeRenderItem(id: "calendar.weatherOffline", rect: CGRect(x: NativeSpace.xl, y: bounds.maxY - footer - editingBottom, width: max(0, bounds.width - NativeSpace.xl * 2), height: footer), label: context.text("status.weather_offline"), kind: .text, color: .weatherCredit))
         }
         update(items: output, invalidatingDisplay: false)
+        if connectionReturnFocus, !state.activity.loading, !state.activity.refreshing {
+            connectionReturnFocus = false
+            if focus.focusedID == nil, window?.firstResponder === self {
+                focus.focus(FocusID(snapshot.calendarAuthorization == .authorized ? "action.calendars" : "action.connectCalendars"))
+            }
+        }
         if staticKeyChanged || oldVisibleDays != Set(cellRects.keys) { super.setNeedsDisplay(bounds) }
         refreshFeedback()
         if let first = days.compactMap({ $0 }).first, let last = days.compactMap({ $0 }).last, let end = last.addingDays(1), next.month.year < 9999 {
@@ -310,8 +326,19 @@ private struct CalendarRenderKey: Equatable {
         case "action.layout": if layoutEditing { toggleLayoutEditing?() }
         case "action.density": var patch = SettingsPatch(); patch.compact = .set(!context.presentation.state.snapshot.board.settings.compact); context.presentation.send(.edit(.settings(patch), undoable: false))
         case "action.connectCalendars":
-            if context.presentation.state.snapshot.calendarAuthorization == .denied || context.presentation.state.snapshot.calendarAuthorization == .restricted { context.presentation.send(.command(.open(.privacy))) }
-            else { context.presentation.send(.command(.connect)) }
+            let state = context.presentation.state
+            guard !state.activity.loading, !state.activity.refreshing else { return }
+            switch state.snapshot.calendarAuthorization {
+            case .denied, .restricted: context.presentation.send(.command(.open(.privacy)))
+            case .notDetermined, .writeOnly:
+                connectionReturnFocus = focus.focusedID == FocusID(id)
+                if context.presentation.send(.command(.connect)) == nil { connectionReturnFocus = false }
+            case .unavailable:
+                guard let range = visibleRange else { return }
+                connectionReturnFocus = focus.focusedID == FocusID(id)
+                if context.presentation.send(.command(.refresh(range, refreshSources: true))) == nil { connectionReturnFocus = false }
+            case .authorized: break
+            }
         default: break
         }
     }
@@ -371,6 +398,11 @@ private struct CalendarRenderKey: Equatable {
         for (rect, key) in weatherIcons where rect.intersects(dirtyRect) { CalendarWeatherPainter.draw(key, in: rect, color: theme.color(.textQuiet), appearance: theme.appearance) }
     }
     override func paint(_ item: NativeRenderItem) {
+        if item.id == "calendar.permission" {
+            let attributes = NativeFont.attributes(font: NativeFont.primary, color: theme.color(.textSecondary), truncation: .byWordWrapping)
+            (item.label as NSString).draw(in: item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xs), withAttributes: attributes)
+            return
+        }
         if item.id == "calendar.logo" {
             theme.color(.fill).setFill(); NSBezierPath(roundedRect: item.rect, xRadius: NativeRadius.input, yRadius: NativeRadius.input).fill()
             if renderKey?.loading == true || renderKey?.refreshing == true { return }
