@@ -162,10 +162,9 @@ private enum DeadlineStepLayout {
         content.update(items: items); scroll.updateFade()
     }
     private func render(_ row: DeadlineRow, rect: CGRect, compact: Bool, append: (NativeRenderItem, ManagementCanvas.Style?) -> Void) {
-        let prefix = "deadline." + row.id, menuWidth: CGFloat
+        let prefix = "deadline." + row.id, menuWidth = NativeSize.compactTarget
         let badgeText = DeadlineRows.badge(day: row.day, today: context.presentation.state.snapshot.clock.today, context: context)
         let badgeWidth = heightStep == .tiny || heightStep == .small ? max(NativeSize.compactTarget * 3, (badgeText as NSString).size(withAttributes: [.font: NativeFont.countdown]).width + NativeSpace.lg) : NativeSize.compactTarget * 3
-        if case .countdown = row.source { menuWidth = NativeSize.compactTarget } else { menuWidth = 0 }
         let titleWidth = max(0, rect.width - badgeWidth - menuWidth)
         let date = ManagementCopy.date(row.day, context: context)
         let origin = row.originKey.map { context.text($0) } ?? row.origin
@@ -183,7 +182,7 @@ private enum DeadlineStepLayout {
             append(NativeRenderItem(id: prefix + ".date", rect: CGRect(x: rect.minX, y: rect.minY + NativeSize.compactTarget, width: titleWidth, height: NativeSize.compactTarget), label: date + (origin.isEmpty ? "" : " · " + origin), kind: .text, color: .textSecondary), .secondary)
         }
         append(NativeRenderItem(id: prefix + ".badge", rect: CGRect(x: rect.maxX - badgeWidth - menuWidth, y: rect.minY, width: badgeWidth, height: rect.height), label: badgeText, kind: .badge, color: row.day < context.presentation.state.snapshot.clock.today ? .danger : .textPrimary), .countdown)
-        if menuWidth > 0 { append(NativeRenderItem(id: prefix + ".menu", rect: CGRect(x: rect.maxX - menuWidth, y: rect.midY - NativeSize.compactTarget / 2, width: menuWidth, height: NativeSize.compactTarget), label: context.text("a11y.item_options", values: ["0": row.title]), kind: .button), .plain); content.displayLabels[prefix + ".menu"] = "···" }
+        if case .countdown = row.source { append(NativeRenderItem(id: prefix + ".menu", rect: CGRect(x: rect.maxX - menuWidth, y: rect.midY - NativeSize.compactTarget / 2, width: menuWidth, height: NativeSize.compactTarget), label: context.text("a11y.item_options", values: ["0": row.title]), kind: .button), .plain); content.displayLabels[prefix + ".menu"] = "···" }
     }
     private func renderDeck(groups: (active: [DeadlineRow], past: [DeadlineRow]), viewport: CGSize, metrics: NativePanelStepMetrics) {
         let cardWidth = metrics.minimumCardWidth!, gap = metrics.cardGap
