@@ -8,15 +8,17 @@ Mac 바탕화면에서 일정과 프로젝트, 메모, 구독, 할 일, 습관, 
 
 ## 베타 다운로드
 
-Apple Silicon과 macOS 14 이상용 준비된 릴리스는 **v1.0.0-beta.5**입니다. 앱과 DMG의 **Developer ID 서명·Apple 공증·티켓 첨부**를 완료했습니다. ZIP에도 같은 티켓 첨부 앱이 들어 있으며 이 정확한 파일의 서명·티켓·Gatekeeper 검사를 통과했습니다. 번들 버전 **1.0**, 빌드 **1**은 그대로입니다.
+Apple Silicon과 macOS 14 이상용 준비된 릴리스는 **v1.0.0-beta.7**입니다. 앱과 DMG의 **Developer ID 서명·Apple 공증·티켓 첨부**를 완료했습니다. ZIP에도 같은 티켓 첨부 앱이 들어 있으며 이 정확한 파일의 서명·티켓·Gatekeeper 검사를 통과했습니다. 앱 버전은 **1.0**, 빌드는 **2**입니다.
 
-[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/SHA256SUMS)
+릴리스가 공개되면 beta.6 이하 사용자는 업데이트 기능이 없으므로 beta.7을 직접 다운로드해 한 번 설치해야 합니다. 이후 업데이트는 자동으로 확인하며 설치는 사용자가 선택합니다.
 
-저장 보호·쓰기 실패의 기본 오류 문구를 구체적으로 표시합니다. 저장 보호와 저장 결과·재시도·복구 동작은 유지합니다. 이 변경으로 이전 실제 계정 오류의 원인이나 해결을 증명하지 않습니다. 실제 EventKit 연결, 깨끗한 계정 첫 실행, 물리 키보드·VoiceOver, 설치·사용자 데이터 업그레이드는 미검증입니다. [INSTALL.md](INSTALL.md)를 확인하세요.
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.7/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.7/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.7/SHA256SUMS)
+
+저장 보호·쓰기 실패의 기본 오류 문구를 구체적으로 표시합니다. 저장 보호와 저장 결과·재시도·복구 동작은 유지합니다. 이 변경으로 이전 실제 계정 오류의 원인이나 해결을 증명하지 않습니다. 격리된 서명 업데이트 시험에서 합성 메모 보존을 확인했지만 정리된 beta.7 ZIP의 설치와 실제 사용자 데이터 업그레이드는 미검증입니다. 실제 EventKit 연결, 깨끗한 계정 첫 실행, 물리 키보드·VoiceOver도 미검증입니다. [INSTALL.md](INSTALL.md)를 확인하세요.
 
 ## 소스 빌드
 
-Apple Silicon Mac, macOS 14 이상, Swift 6, Python 3 및 Xcode 또는 Command Line Tools가 필요합니다. 앱의 외부 패키지 의존성은 없습니다. 이 디렉터리에서 실행합니다.
+Apple Silicon Mac, macOS 14 이상, Swift 6, Python 3 및 Xcode 또는 Command Line Tools가 필요합니다. 앱에는 MIT 라이선스의 Sparkle 업데이트 프레임워크가 포함됩니다. [Sparkle 라이선스와 서드파티 고지](Vendor/Sparkle/LICENSE)를 확인하세요. 이 디렉터리에서 실행합니다.
 
 ```sh
 zsh scripts/check.sh

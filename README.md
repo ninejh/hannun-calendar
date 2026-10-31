@@ -8,15 +8,17 @@ Move and resize the calendar and four configurable panels on a free grid. Hold a
 
 ## Beta download
 
-The prepared release is **v1.0.0-beta.5**, for Apple Silicon and macOS 14 or later. The app and DMG are **Developer ID signed, Apple notarized and stapled**. The ZIP contains the same stapled app. Strict signature, ticket and Gatekeeper checks passed for these exact artifacts. Bundle version **1.0**, build **1** remain unchanged.
+The prepared release is **v1.0.0-beta.7**, for Apple Silicon and macOS 14 or later. The app and DMG are **Developer ID signed, Apple notarized and stapled**. The ZIP contains the same stapled app. Strict signature, ticket and Gatekeeper checks passed for these exact artifacts. The app is version **1.0**, build **2**.
 
-[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.5/SHA256SUMS)
+When the release is published, versions through beta.6 need to download and install beta.7 manually once; they do not include the updater. Later update checks run automatically, and installation requires your choice.
 
-Storage protection and write failures use specific messages when the previous message was generic. Storage protection, save outcomes, retry and recovery behavior are preserved. This does not establish the cause or resolution of any previously reported real-account error. Real EventKit connectivity, clean-account first launch, physical keyboard/VoiceOver, installation and user-data upgrades remain unverified. See [INSTALL.md](INSTALL.md).
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.7/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.7/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.7/SHA256SUMS)
+
+Storage protection and write failures use specific messages when the previous message was generic. Storage protection, save outcomes, retry and recovery behavior are preserved. This does not establish the cause or resolution of any previously reported real-account error. An isolated signed update test preserved a synthetic note, but installation of the clean beta.7 ZIP and upgrades of real user data remain unverified. Real EventKit connectivity, clean-account first launch and physical keyboard/VoiceOver also remain unverified. See [INSTALL.md](INSTALL.md).
 
 ## Build from source
 
-Requires an Apple Silicon Mac, macOS 14 or later, Swift 6, Python 3 and Xcode or Command Line Tools. No third-party application dependencies are required. From this directory:
+Requires an Apple Silicon Mac, macOS 14 or later, Swift 6, Python 3 and Xcode or Command Line Tools. The app bundles the Sparkle updater under the MIT license; see the [Sparkle license and third-party notices](Vendor/Sparkle/LICENSE). From this directory:
 
 ```sh
 zsh scripts/check.sh
