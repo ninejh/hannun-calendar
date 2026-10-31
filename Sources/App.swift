@@ -200,6 +200,7 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     private var menuKey: String?
     private var mainMenu: NSMenu?
     private let viewportContext: NativeLayoutViewportContext?
+    private let updater: (any AppUpdating)?
 
     static var panelFactories: [PanelID: PanelFactory] { [
         .today: { AgendaPanelController(context: $0) }, .notes: { NotesPanelController(context: $0) },
@@ -217,9 +218,10 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
         let application = try NativeBoardApplication.make(configuration: configuration, layoutViewport: { viewport.value })
         return NativeAppComposition(application: application, frame: actualFrame ?? .zero, createsStatusItem: createsStatusItem, viewportContext: viewport)
     }
-    init(application: NativeBoardApplication, frame explicitFrame: CGRect? = nil, createsStatusItem: Bool = true, viewportContext: NativeLayoutViewportContext? = nil) {
+    init(application: NativeBoardApplication, frame explicitFrame: CGRect? = nil, createsStatusItem: Bool = true, viewportContext: NativeLayoutViewportContext? = nil, updater: (any AppUpdating)? = nil) {
         self.viewportContext = viewportContext
         self.application = application
+        self.updater = updater ?? AppUpdaterFactory.make(configuration: application.configuration)
         presentation = BoardViewModel(application: application)
         root = BoardRootView(presentation: presentation, strings: application.preferences.strings,
                              panelFactories: Self.panelFactories, overlayFactory: makeNativeOverlayFactory())
@@ -258,7 +260,7 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
             self.root.needsLayout = true; self.root.layoutSubtreeIfNeeded(); self.showBoard(); self.application.start()
             let handle = self.application.submit(.uiReady, context: self.context())
             let ready = await handle.settled.value
-            if case .success = ready { self.isReady = true } else { self.lastStartupReceipt = ready }
+            if case .success = ready { self.isReady = true; self.updater?.start() } else { self.lastStartupReceipt = ready }
         }
         starting = task; await task.value; starting = nil
     }
@@ -282,7 +284,10 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
         if state.login == .requiresApproval || state.login == .notFound || failure?.code == .loginRegistrationFailed {
             add(menu, "settings.open_login", #selector(loginSettingsAction))
         }
-        menu.addItem(.separator()); add(menu, "menu.quit", #selector(quitAction), key: "q")
+        menu.addItem(.separator())
+        let update = add(menu, "menu.check_updates", #selector(checkUpdatesAction))
+        update.isEnabled = updater?.canCheckForUpdates == true
+        add(menu, "menu.quit", #selector(quitAction), key: "q")
         statusMenu = menu; statusItem?.menu = menu; statusItem?.button?.toolTip = text("menu.tooltip")
         configureMainMenu()
     }
@@ -311,6 +316,9 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
             item.state = status == .enabled ? .on : .off
             item.toolTip = status == .requiresApproval ? text("error.login_approval_required") : nil
         }
+        for item in menu.items where item.action == #selector(checkUpdatesAction) {
+            item.isEnabled = updater?.canCheckForUpdates == true
+        }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         Task { @MainActor in _ = await self.hideBoard() }; return false
@@ -323,6 +331,25 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
         // previous hide/quit path did after attempting its UI save.
         if case .failure = result { _ = await application.flush() }
         lastFlushReceipt = result.compact; return result.compact
+    }
+    @discardableResult func flushForTermination() async -> CommandReceipt {
+        let receipt = await flushForLifecycle()
+        if case .failure = receipt { return receipt }
+        // A save can finish while another editor or write is still outstanding.
+        // Never discard those drafts, including an active marked-text session.
+        let marked = (panel.firstResponder as? NSTextView)?.hasMarkedText() == true
+        // Management forms also contain date and status edits which do not publish
+        // a text draft. Keep an open form until its user resolves it.
+        let managementOpen = (root.controller(for: .projects) as? ProjectsPanelController)?.editor != nil ||
+            (root.controller(for: .deadlines) as? DeadlinesPanelController)?.editor != nil
+        let unresolved = presentation.state.drafts.contains { key, value in
+            // Search is a cached navigation query, not an edit to persisted data.
+            key != .search || value.textValue?.isComposing == true
+        }
+        guard !marked, !managementOpen, !unresolved, presentation.state.pending.isEmpty else {
+            return .failure(AppFailure(code: .busyRetry, messageKey: "error.quit_unsaved", retryable: true), snapshot: nil)
+        }
+        return receipt
     }
     func windowDidResize(_ notification: Notification) { viewportContext?.update(size: root.bounds.size); root.needsLayout = true }
     @discardableResult func hideBoard() async -> CommandReceipt {
@@ -363,6 +390,10 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     @objc private func loginAction() { presentation.send(.command(.setLogin(liveLoginStatus != .enabled))) }
     @objc private func loginSettingsAction() { presentation.send(.command(.open(.login))) }
     @objc private func quitAction() { NSApp.terminate(nil) }
+    @objc private func checkUpdatesAction() {
+        guard updater?.canCheckForUpdates == true else { return }
+        updater?.checkForUpdates()
+    }
     @objc private func fitAction() { fitToPointerDisplay() }
     @objc private func screenChanged() { fitRetainedDisplay() }
     func fitToPointerDisplay() {
@@ -453,8 +484,23 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { composition.showBoard(); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if terminating { return .terminateNow }; terminating = true
-        Task { @MainActor in _ = await self.composition.flushForLifecycle(); self.composition.dispose(); sender.reply(toApplicationShouldTerminate: true) }
+        if terminating { return .terminateCancel }; terminating = true
+        Task { @MainActor in
+            let receipt = await self.composition.flushForTermination()
+            if case .success = receipt {
+                self.composition.dispose(); sender.reply(toApplicationShouldTerminate: true)
+            } else {
+                self.terminating = false
+                sender.reply(toApplicationShouldTerminate: false)
+                self.composition.showBoard()
+                NSApp.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                alert.messageText = self.composition.text("error.quit_unsaved_title")
+                alert.informativeText = self.composition.text("error.quit_unsaved")
+                alert.addButton(withTitle: self.composition.text("error.quit_unsaved_ok"))
+                alert.runModal()
+            }
+        }
         return .terminateLater
     }
     func applicationWillTerminate(_ notification: Notification) { composition.dispose() }

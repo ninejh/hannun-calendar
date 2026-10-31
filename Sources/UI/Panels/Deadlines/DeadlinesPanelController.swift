@@ -249,12 +249,13 @@ private enum DeadlineStepLayout {
         retainedMenu?.dispose()
         let menu = NativeMenu(items: [NativeMenuEntry(id: "rename", title: context.text("deadlines.rename")), NativeMenuEntry(id: "delete", title: context.text("deadlines.delete"))]) { [weak self] action in
             guard let self else { return }
-            if action == "delete" { self.closeEditor(); _ = self.save(.countdown(.delete(id: id)), feedback: "toast.dday_deleted") }
+            if action == "delete" { guard self.editor?.canDismiss != false else { return }; self.closeEditor(); _ = self.save(.countdown(.delete(id: id)), feedback: "toast.dday_deleted") }
             else if let item = self.context.presentation.state.snapshot.board.milestones.first(where: { $0.id == id }) { self.openEditor(item: item) }
         }
         retainedMenu = menu; return menu.menu
     }
     private func openEditor(item: Milestone?) {
+        guard editor?.canDismiss != false else { return }
         closeEditor(); let id = item?.id ?? UUID()
         let editor = ProjectDeadlineEditor(context: context, kind: .countdown, id: id, title: item?.title ?? "", day: item?.day, creating: item == nil) { [weak self] title, day, _ in
             guard let self, let day else { return nil }

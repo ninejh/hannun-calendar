@@ -20,6 +20,10 @@ import AppKit
     private var targetEnabled: Bool
     private var status: ProjectStatus
     private let creating: Bool
+    private let initialTitle: String
+    private let initialDay: DateOnly
+    private let initialTargetEnabled: Bool
+    private let initialStatus: ProjectStatus
     private var statusMenu: NativeMenu?
     private var disposed = false
     var draftKey: DraftKey { kind == .project ? .project(id) : .countdown(id) }
@@ -27,6 +31,8 @@ import AppKit
          commit: @escaping @MainActor (String, DateOnly?, ProjectStatus) -> OperationHandle?) {
         self.context = context; self.kind = kind; self.id = id; self.creating = creating; self.commit = commit
         self.status = status; targetEnabled = day != nil || kind == .countdown
+        initialTitle = title; initialStatus = status; initialTargetEnabled = day != nil || kind == .countdown
+        initialDay = day ?? ManagementCopy.tomorrow(context.presentation.state.snapshot.clock.today)
         let titleKey = kind == .project ? "projects.field_name" : "deadlines.field_title"
         let dateKey = kind == .project ? "projects.field_target" : "deadlines.field_date"
         titleField = NativeTextField(label: context.text(titleKey), identifier: "management.\(id).title")
@@ -34,13 +40,14 @@ import AppKit
         surface = PanelContainerView(frame: CGRect(x: 0, y: 0, width: NativeSize.popoverWidth, height: NativeSize.popoverWidth - NativeSpace.xxl), focus: context.focus)
         super.init()
         titleField.stringValue = context.presentation.state.drafts[draftKey]?.textValue?.text ?? title
-        datePicker.day = day ?? ManagementCopy.tomorrow(context.presentation.state.snapshot.clock.today)
+        datePicker.day = initialDay
         titleField.delegate = self; titleField.target = self; titleField.action = #selector(submitAction)
         datePicker.target = self; datePicker.action = #selector(dateChanged)
         surface.addSubview(titleField); surface.addSubview(datePicker)
         surface.onAction = { [weak self] action in self?.act(action) }
         surface.onShortcut = { [weak self] event in
-            guard event.keyCode == 53 else { return false }; self?.close(); return true
+            guard event.keyCode == 53, let self else { return false }
+            return self.cancel()
         }
         host.view = surface; popover.contentViewController = host; popover.behavior = .transient; popover.delegate = self
         popover.animates = false // Kit opacity supplies the approved fade; no system zoom.
@@ -71,33 +78,35 @@ import AppKit
         datePicker.setAccessibilityLabel(context.text(kind == .project ? "projects.field_target" : "deadlines.field_date"))
         titleField.frame = CGRect(x: inset, y: line * 2, width: width - inset * 2, height: line)
         datePicker.frame = CGRect(x: inset, y: line * 4, width: width - inset * 2, height: line)
+        titleField.isEnabled = !pending; datePicker.isEnabled = !pending
         datePicker.isHidden = !targetEnabled
         let headline = creating ? (kind == .project ? "projects.new_title" : "deadlines.new_title") : (kind == .project ? "projects.rename" : "deadlines.rename")
         let titleKey = kind == .project ? "projects.field_name" : "deadlines.field_title"
         var items = [NativeRenderItem(id: "management.heading", rect: CGRect(x: inset, y: NativeSpace.sm, width: width - inset * 2, height: line), label: context.text(headline), kind: .text),
                      NativeRenderItem(id: "management.title.label", rect: CGRect(x: inset, y: line, width: width - inset * 2, height: line), label: context.text(titleKey), kind: .text),
-                     NativeRenderItem(id: "management.date.toggle", rect: CGRect(x: inset, y: line * 3, width: width - inset * 2, height: line), label: context.text(kind == .project ? "projects.target_date_optional" : "deadlines.field_date"), kind: kind == .project ? .checkBox : .text, checked: targetEnabled)]
+                     NativeRenderItem(id: "management.date.toggle", rect: CGRect(x: inset, y: line * 3, width: width - inset * 2, height: line), label: context.text(kind == .project ? "projects.target_date_optional" : "deadlines.field_date"), kind: kind == .project ? .checkBox : .text, enabled: !pending, checked: targetEnabled)]
         if creating && kind == .project {
-            items.append(NativeRenderItem(id: "management.status", rect: CGRect(x: inset, y: line * 5 + NativeSpace.xs, width: width - inset * 2, height: line), label: context.text(ManagementCopy.status(status)), kind: .button, fill: .projectStatusBg))
+            items.append(NativeRenderItem(id: "management.status", rect: CGRect(x: inset, y: line * 5 + NativeSpace.xs, width: width - inset * 2, height: line), label: context.text(ManagementCopy.status(status)), kind: .button, enabled: !pending, fill: .projectStatusBg))
         }
         if let key = validationKey ?? failure?.messageKey {
             items.append(NativeRenderItem(id: "management.error", rect: CGRect(x: inset, y: line * 6 + NativeSpace.sm, width: width - inset * 2, height: line * 2), label: context.text(key), kind: .text, color: .danger))
         }
         let buttonY = surface.bounds.height - line - inset
-        items.append(NativeRenderItem(id: "management.cancel", rect: CGRect(x: inset, y: buttonY, width: line * 3, height: line), label: context.text("event.cancel"), kind: .button))
+        items.append(NativeRenderItem(id: "management.cancel", rect: CGRect(x: inset, y: buttonY, width: line * 3, height: line), label: context.text("event.cancel"), kind: .button, enabled: !pending))
         let key = pending ? "loading.label" : failure != nil ? "error.retry_action" : creating ? (kind == .project ? "projects.submit_add" : "deadlines.submit_add") : "event.save_changes"
         items.append(NativeRenderItem(id: "management.submit", rect: CGRect(x: width / 2, y: buttonY, width: width / 2 - inset, height: line), label: context.text(key), kind: .button, enabled: !pending, fill: .fill, color: .toastText))
         surface.update(items: items)
     }
     private func act(_ action: String) {
+        guard !pending else { return }
         switch action {
-        case "management.cancel": close()
+        case "management.cancel": _ = cancel()
         case "management.submit": submit()
         case "management.date.toggle" where kind == .project: targetEnabled.toggle(); render()
         case "management.status":
             statusMenu?.dispose()
             let menu = NativeMenu(items: ProjectStatus.allCases.map { NativeMenuEntry(id: $0.rawValue, title: context.text(ManagementCopy.status($0)), checked: $0 == status) }) { [weak self] raw in
-                guard let self, let value = ProjectStatus(rawValue: raw) else { return }; self.status = value; self.render()
+                guard let self, !self.pending, let value = ProjectStatus(rawValue: raw) else { return }; self.status = value; self.render()
             }
             statusMenu = menu
             if let item = surface.items.first(where: { $0.id == action }), surface.window != nil { menu.menu.popUp(positioning: nil, at: CGPoint(x: item.rect.minX, y: item.rect.maxY), in: surface) }
@@ -114,7 +123,11 @@ import AppKit
     }
     func submit() {
         guard !pending, !disposed else { return }
-        guard (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
+        guard (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+              (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
+        // End native field editing before capturing the submitted values, so the
+        // shared field editor cannot accept keystrokes or start IME while saving.
+        if let window = surface.window, !window.makeFirstResponder(surface) { return }
         let title = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { validationKey = "error.empty_name"; render(); return }
         guard title.count <= 500 else { validationKey = "error.validation_failed"; render(); return }
@@ -128,15 +141,33 @@ import AppKit
             guard let self, !self.disposed else { return }
             self.pending = false
             switch receipt {
-            case .success: self.context.presentation.clearDraft(self.draftKey); self.close()
+            case .success: self.context.presentation.clearDraft(self.draftKey); self.finishClose()
             case .failure(let failure, _):
                 self.failure = failure
-                if failure.committed == .yes { self.context.presentation.clearDraft(self.draftKey); self.close() } else { self.render() }
+                if failure.committed == .yes { self.context.presentation.clearDraft(self.draftKey); self.finishClose() } else { self.render() }
             }
         }
     }
+    var canDismiss: Bool {
+        !pending && failure == nil && context.presentation.state.drafts[draftKey] == nil &&
+        (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true &&
+        (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true &&
+        titleField.stringValue == initialTitle && datePicker.day == initialDay &&
+        targetEnabled == initialTargetEnabled && status == initialStatus
+    }
+    func popoverShouldClose(_ popover: NSPopover) -> Bool { canDismiss }
     func popoverDidClose(_ notification: Notification) { onClose?() }
-    func close() { popover.close(); onClose?() }
+    @discardableResult private func cancel() -> Bool {
+        // Escape belongs to the input method during composition. An admitted
+        // write must settle before cancellation can discard its retry draft.
+        guard !pending, (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+              (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return false }
+        context.presentation.clearDraft(draftKey)
+        finishClose()
+        return true
+    }
+    func close() { if canDismiss { finishClose() } }
+    private func finishClose() { popover.close(); onClose?() }
     func dispose() {
         guard !disposed else { return }; disposed = true
         popover.delegate = nil; popover.close(); onClose = nil; commit = nil; statusMenu?.dispose(); statusMenu = nil

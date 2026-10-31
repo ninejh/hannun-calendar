@@ -51,6 +51,7 @@ TARGETS = {
     'ClockFocusViewTests': ('Application', 'Presentation', 'UI/Kit', 'UI/Panels/WorldClock', 'UI/Panels/Focus'),
     'AppCompositionTests': ('Application', 'Presentation', 'UI', 'App.swift', 'DesktopBridge.swift'),
     'NativeHostTests': ('Application', 'Presentation', 'UI', 'App.swift', 'DesktopBridge.swift', 'Testing', 'TestSupport.swift'),
+    'UpdaterTests': ('Application', 'Presentation', 'UI', 'App.swift', 'DesktopBridge.swift'),
 }
 GUI_TARGETS = set(TARGETS) - {'CoreTests', 'PanelDomainTests', 'ExternalDataTests', 'PanelServiceTests', 'NativeApplicationTests', 'CalendarRefreshTests'}
 ALIASES = {'t012-domain': 'PanelDomainTests', 't014-external': 'ExternalDataTests', 't015-services': 'PanelServiceTests'}
@@ -357,7 +358,7 @@ def validate_sources(paths, testing=False):
                               'Unguarded test control/fixture in production source: ' + str(path))
 
 
-def compiler(output, testing=False, executable_tests=False, typecheck=False, optimized=False):
+def compiler(output, testing=False, executable_tests=False, typecheck=False, optimized=False, sparkle=None):
     command = ['xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6', '-warnings-as-errors',
                '-target', os.uname().machine + '-apple-macosx14.0', '-module-cache-path', str(output / 'module-cache')]
     resources.require(not (output / 'module-cache').is_symlink(), 'Symlink module cache refused')
@@ -373,6 +374,8 @@ def compiler(output, testing=False, executable_tests=False, typecheck=False, opt
         command += ['-typecheck']
     for framework in FRAMEWORKS:
         command += ['-framework', framework]
+    if sparkle is not None:
+        command += ['-F', str(sparkle), '-framework', 'Sparkle', '-Xlinker', '-rpath', '-Xlinker', '@executable_path/../Frameworks']
     return scheduled_swift(output, command)
 
 
@@ -399,6 +402,32 @@ def copy_resources(root, destination):
     for name in resources.NATIVE_RESOURCES:
         shutil.copyfile(resources.regular(root / 'Resources' / name), destination / name)
     shutil.copyfile(resources.regular(root / 'LICENSE'), destination / 'LICENSE')
+    shutil.copyfile(resources.regular(verify_bundle.SPARKLE_VENDOR / 'LICENSE'), destination / 'Sparkle-LICENSE')
+
+
+def copy_sparkle(destination):
+    source = verify_bundle.SPARKLE_VENDOR / 'Sparkle.framework'
+    verify_bundle.inspect_sparkle(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination, symlinks=True)
+    verify_bundle.inspect_sparkle(source)
+    verify_bundle.inspect_sparkle(destination)
+    return destination
+
+
+def sign_sparkle(framework):
+    for relative in ('Versions/B/XPCServices/Installer.xpc', 'Versions/B/XPCServices/Downloader.xpc',
+                     'Versions/B/Autoupdate', 'Versions/B/Updater.app', '.'):
+        target = (framework / relative).resolve()
+        command = ['codesign', '--force', '--sign', '-']
+        if 'Downloader.xpc' in relative:
+            command += ['--preserve-metadata=entitlements']
+        subprocess.run(command + [str(target)], check=True, capture_output=True)
+    verify_bundle.verify_sparkle_code(framework)
+
+
+def needs_sparkle(sources):
+    return any('import Sparkle' in path.read_text() for path in sources if path.suffix == '.swift')
 
 
 @contextmanager
@@ -429,7 +458,10 @@ def run_check(root, output, components=False, testing=False):
         workspace = temporary / 'workspace'
         snapshot(root, sources + [root / 'scripts/MakeIcon.swift'], workspace)
         copied = [workspace / path.relative_to(root) for path in sources]
-        command = compiler(temporary / 'sources', testing=testing, typecheck=True) + list(map(str, copied))
+        sparkle = None
+        if needs_sparkle(copied):
+            sparkle = copy_sparkle(temporary / 'Frameworks/Sparkle.framework').parent
+        command = compiler(temporary / 'sources', testing=testing, typecheck=True, sparkle=sparkle) + list(map(str, copied))
         icon = scheduled_swift(temporary / 'icon', ['xcrun', 'swiftc', '-swift-version', '6', '-warnings-as-errors', '-typecheck',
                         '-target', os.uname().machine + '-apple-macosx14.0', '-module-cache-path', str(temporary / 'icon-cache'),
                         str(workspace / 'scripts/MakeIcon.swift')])
@@ -455,10 +487,12 @@ def run_build(root, output):
         app = stage / 'Hannun Calendar.app'
         binary = app / 'Contents/MacOS/HannunCalendar'
         binary.parent.mkdir(parents=True)
-        # Relative production inputs prevent private build paths in Swift #filePath literals.
+        framework = copy_sparkle(app / 'Contents/Frameworks/Sparkle.framework')
+        # Swift embeds #filePath literals; relative inputs prevent local workspace paths in distribution binaries.
         relative_sources = [path.relative_to(workspace).as_posix() for path in copied]
-        subprocess.run(compiler(stage, optimized=True) + relative_sources + ['-o', str(binary)],
+        subprocess.run(compiler(stage, optimized=True, sparkle=framework.parent) + relative_sources + ['-o', str(binary)],
                        cwd=workspace, check=True)
+        sign_sparkle(framework)
         copy_resources(workspace, app / 'Contents/Resources')
         shutil.copyfile(workspace / 'Resources/Info.plist', app / 'Contents/Info.plist')
         subprocess.run(['codesign', '--force', '--sign', '-', '--entitlements',
@@ -612,7 +646,12 @@ def prepare_executable_test(root, output, name):
         binary = app / 'Contents/MacOS' / name
         binary.parent.mkdir(parents=True)
         copied = [workspace / p.relative_to(root) for p in sources]
-        subprocess.run(compiler(work, testing=True, executable_tests=True) + list(map(str, copied)) + ['-o', str(binary)], check=True)
+        sparkle = None
+        if needs_sparkle(copied):
+            framework = copy_sparkle(app / 'Contents/Frameworks/Sparkle.framework')
+            sparkle = framework.parent
+            sign_sparkle(framework)
+        subprocess.run(compiler(work, testing=True, executable_tests=True, sparkle=sparkle) + list(map(str, copied)) + ['-o', str(binary)], check=True)
         copy_resources(workspace, app / 'Contents/Resources')
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({
             'CFBundleIdentifier': 'io.github.ninejh.hannuncalendar.tests.' + name.lower(),

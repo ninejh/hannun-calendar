@@ -437,13 +437,14 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         entries.append(NativeMenuEntry(id: "delete", title: context.text("projects.delete")))
         let menu = NativeMenu(items: entries) { [weak self] action in
             guard let self else { return }
-            if action == "delete" { self.closeEditor(); _ = self.save(.project(.delete(id: id)), feedback: "toast.project_deleted") }
+            if action == "delete" { guard self.editor?.canDismiss != false else { return }; self.closeEditor(); _ = self.save(.project(.delete(id: id)), feedback: "toast.project_deleted") }
             else if action == "rename" { self.openEditor(project: project) }
             else if let status = ProjectStatus(rawValue: action) { _ = self.save(.project(.update(id: id, patch: ProjectPatch(status: .set(status)))), feedback: status == .done ? "toast.project_done" : "toast.project_status") }
         }
         retainedMenu = menu; return menu.menu
     }
     private func openEditor(project: Project?) {
+        guard editor?.canDismiss != false else { return }
         closeEditor(); let id = project?.id ?? UUID()
         let editor = ProjectDeadlineEditor(context: context, kind: .project, id: id, title: project?.title ?? "", day: project?.targetDay, status: project?.status ?? .active, creating: project == nil) { [weak self] title, day, status in
             guard let self else { return nil }

@@ -1,5 +1,7 @@
 """Validate native resources without requiring the retired web renderer or Node."""
 import argparse
+import base64
+import hashlib
 import ast
 import json
 import math
@@ -13,6 +15,8 @@ PRODUCTION_ENTITLEMENTS = {
     'com.apple.security.app-sandbox': True,
     'com.apple.security.personal-information.calendars': True,
     'com.apple.security.network.client': True,
+    'com.apple.security.temporary-exception.mach-lookup.global-name': [
+        'io.github.ninejh.hannuncalendar-spks', 'io.github.ninejh.hannuncalendar-spki'],
 }
 
 
@@ -84,6 +88,27 @@ def validate_plist(info):
     require(info.get('CFBundleIdentifier') == 'io.github.ninejh.hannuncalendar', 'Unexpected production bundle ID')
     require(info.get('CFBundleExecutable') == 'HannunCalendar', 'Unexpected executable')
     require(info.get('CFBundleShortVersionString') == '1.0', 'Unexpected application version')
+    updater_keys = {'SUFeedURL', 'SUPublicEDKey', 'SUEnableInstallerLauncherService',
+                    'SUVerifyUpdateBeforeExtraction', 'SURequireSignedFeed', 'SUSignedFeedFailureExpirationInterval',
+                    'SUEnableSystemProfiling', 'SUShowReleaseNotes', 'SUEnableAutomaticChecks',
+                    'SUAutomaticallyUpdate', 'SUAllowsAutomaticUpdates'}
+    require({key for key in info if key.startswith('SU')} == updater_keys, 'Unexpected updater plist keys')
+    version = info.get('CFBundleVersion')
+    require(isinstance(version, str) and version.isdecimal() and int(version) >= 2, 'Invalid monotonic updater build version')
+    require(info.get('SUFeedURL') == 'https://hannun-calendar.vercel.app/appcast.xml', 'Unexpected update feed')
+    try:
+        public_key = base64.b64decode(info.get('SUPublicEDKey', ''), validate=True)
+    except (ValueError, TypeError):
+        raise ValueError('Invalid update public key') from None
+    require(len(public_key) == 32, 'Invalid update public key')
+    require(hashlib.sha256(public_key).hexdigest() == '271600c76ea44b59bfcd8ea8f4d7308790919a5f05bb2adf557789a01f1056e1',
+            'Unexpected update public key')
+    for key in ('SUEnableInstallerLauncherService', 'SUVerifyUpdateBeforeExtraction', 'SURequireSignedFeed', 'SUEnableAutomaticChecks'):
+        require(info.get(key) is True, 'Missing updater security setting: ' + key)
+    for key in ('SUEnableSystemProfiling', 'SUShowReleaseNotes', 'SUAutomaticallyUpdate', 'SUAllowsAutomaticUpdates'):
+        require(info.get(key) is False, 'Unexpected updater setting: ' + key)
+    require(type(info.get('SUSignedFeedFailureExpirationInterval')) is int and info['SUSignedFeedFailureExpirationInterval'] == 0,
+            'Signed feed failure must not expire')
     require(info.get('LSMinimumSystemVersion') == '14.0', 'Expected macOS 14 minimum')
     require(set(info.get('CFBundleLocalizations', [])) == {'en', 'ko'}, 'Missing supported localizations')
 

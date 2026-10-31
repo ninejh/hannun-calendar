@@ -10,7 +10,18 @@
     <key>CFBundleLocalizations</key><array><string>en</string><string>ko</string></array>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleVersion</key><string>2</string>
+    <key>SUFeedURL</key><string>https://hannun-calendar.vercel.app/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>RpAUk8ZqvZYRwF/mxg0Uw2UZhrImaUxYIHahXA+qCV4=</string>
+    <key>SUEnableInstallerLauncherService</key><true/>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
+    <key>SUSignedFeedFailureExpirationInterval</key><integer>0</integer>
+    <key>SUEnableSystemProfiling</key><false/>
+    <key>SUShowReleaseNotes</key><false/>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUAutomaticallyUpdate</key><false/>
+    <key>SUAllowsAutomaticUpdates</key><false/>
     <key>LSUIElement</key><true/>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>

@@ -177,7 +177,8 @@ struct AgendaProjection: Equatable {
                 headerRect: metrics.regions(in: surface.bounds, headerHeight: header).headerRect,
                 excludedRects: items.filter { $0.id == "agenda-add" || $0.id == "agenda-back-today" }.map(\.hitRect) + editExclusions, actionLabel: context.text("slot_menu.title")))
         }
-        let showNext = fixedDay == nil && !projection.todayRows.isEmpty
+        let hasAllDay = projection.todayRows.contains { $0.item.allDay } || projection.rows.contains { $0.item.allDay }
+        let showNext = fixedDay == nil && !projection.todayRows.isEmpty && (projection.next != nil || !hasAllDay)
         let summaryInScroll = showNext && useSelectedHeader && !wide && heightStep == .tiny
         var scrolledSummary: NativeRenderItem?
         if showNext {
