@@ -97,6 +97,7 @@ enum BoardCommand: Sendable, Equatable {
     case connect
     case edit(BoardEdit, undoable: Bool)
     case saveEvent(EventSaveInput)
+    case deleteEvent(EventIdentity, expectedVersion: String)
     case undoCreate(UndoToken), undoEvent(UndoToken), invalidateUndo(UndoToken)
     case open(OSRequestTarget), diagnostics, readAudit, setLogin(Bool), uiReady
     case focus(FocusCommand), notification(NotificationPreferenceTarget, enabled: Bool)

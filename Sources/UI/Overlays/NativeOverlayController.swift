@@ -82,6 +82,11 @@ import AppKit
     private var disposed = false
     private var busy = false
     private var unknownOperation: UUID?
+    private enum DeleteStage { case discardDraft, confirm }
+    private var deleteStage: DeleteStage?
+    private var deleteOperation: UUID?
+    private var ownsDeleteReceipt = false
+    private var deleteFinished = false
     private var connecting = false
     private var connectionReturnFocus = false
     private var cityGeneration = 0
@@ -143,6 +148,29 @@ import AppKit
         lifetime.own(context.presentation.subscribe { [weak self] change in
             guard !change.domains.isDisjoint(with: [.board, .calendar, .environment, .external, .activity, .error, .pending, .view]) else { return }
             guard let self else { return }
+            if let id = self.deleteOperation, !self.ownsDeleteReceipt, !self.state.pending.contains(where: { $0.id == id }) {
+                // A global error may belong to another operation; only this deletion's
+                // receipt can establish whether the source was actually deleted.
+                guard case .success(.completed(let receipt)) = self.context.presentation.reconcile(id) else {
+                    self.inlineMessage = self.text("event.delete_unknown"); self.render(); return
+                }
+                switch receipt {
+                case .success(.eventDeleted(let result), _):
+                    self.deleteOperation = nil; self.busy = false; self.draftCommitted = true
+                    if result.metadataStatus == .failed {
+                        self.deleteFinished = true; self.inlineMessage = self.text("event.delete_partial"); self.render()
+                    } else { self.requestDismiss() }
+                case .failure(let failure, _):
+                    if failure.committed == .unknown {
+                        self.inlineMessage = self.text("event.delete_unknown"); self.render()
+                    } else {
+                        self.deleteOperation = nil; self.busy = false; self.showFailure(failure)
+                    }
+                default:
+                    self.inlineMessage = self.text("event.delete_unknown"); self.render()
+                }
+                return
+            }
             if let id = self.unknownOperation, !self.state.pending.contains(where: { $0.id == id }) {
                 self.unknownOperation = nil; self.busy = false
                 if let failure = self.state.lastError { self.showFailure(failure, presentationOwned: true) }
@@ -171,6 +199,7 @@ import AppKit
             for input in textFields.values { input.stringValue = "" }
             datePickers.values.forEach { $0.removeFromSuperview() }; datePickers = [:]
             inlineMessage = nil; moreDetails = false; quickID = UUID(); draftCommitted = false
+            deleteStage = nil; deleteOperation = nil; ownsDeleteReceipt = false; deleteFinished = false; unknownOperation = nil; busy = false
         }
         var incomingAnchor: StableAnchor?
         switch request {
@@ -226,18 +255,25 @@ import AppKit
         else if case .event(let saved) = state.drafts[key] { editor?.event = saved }
     }
     private func bindExistingPending() {
-        guard let editor else { return }
+        let eventID: String?
+        if case .event(let id, _) = route { eventID = id } else { eventID = editor?.original?.id }
         let pending = state.pending.first { operation in
             operation.affected.contains { affected in
                 if case .event(let id) = affected {
-                    return editor.original.map { $0.id == id } ?? id.hasPrefix("pending:")
+                    return eventID.map { $0 == id } ?? id.hasPrefix("pending:")
                 }
                 return false
             }
         }
         if let pending {
-            unknownOperation = pending.id; busy = true
-            inlineMessage = text(pending.phase == .unknown ? "error.transport_unknown" : "notes.saving")
+            busy = true
+            if pending.kind == "deleteEvent" {
+                deleteOperation = pending.id
+                inlineMessage = text(pending.phase == .unknown ? "event.delete_unknown" : "notes.saving")
+            } else {
+                unknownOperation = pending.id
+                inlineMessage = text(pending.phase == .unknown ? "error.transport_unknown" : "notes.saving")
+            }
         }
     }
     var preferredSize: CGSize {
@@ -291,8 +327,15 @@ import AppKit
             headerItems.append(NativeRenderItem(id: "overlay.error", rect: CGRect(x: NativeSpace.lg, y: headerHeight, width: width, height: height), label: inlineMessage, kind: .text, color: .danger))
             headerHeight += height + NativeSpace.xs
         }
+        let fixedCancel: Bool = if case .event = route { editor != nil && deleteStage == nil } else { false }
+        let footerHeight = NativeSize.compactTarget + NativeSpace.xs
+        let footerY = max(headerHeight, surface.bounds.height - NativeSpace.lg - footerHeight)
+        if fixedCancel {
+            headerItems.append(NativeRenderItem(id: "overlay.cancel", rect: CGRect(x: NativeSpace.lg, y: footerY, width: max(0, surface.bounds.width - NativeSpace.lg * 2), height: footerHeight), label: text("event.cancel"), kind: .button))
+        }
         surface.update(items: headerItems)
-        scroll.frame = CGRect(x: NativeSpace.lg, y: headerHeight, width: max(0, surface.bounds.width - NativeSpace.lg * 2), height: max(0, surface.bounds.height - headerHeight - NativeSpace.lg))
+        let scrollBottom = fixedCancel ? footerY : surface.bounds.height - NativeSpace.lg
+        scroll.frame = CGRect(x: NativeSpace.lg, y: headerHeight, width: max(0, surface.bounds.width - NativeSpace.lg * 2), height: max(0, scrollBottom - headerHeight))
         renderItems = []; itemActions = [:]; usedFields = []; usedDates = []; y = 0; bodyWidth = scroll.contentSize.width
         notesScroll.isHidden = true
         switch route {
@@ -388,7 +431,33 @@ import AppKit
         y += NativeSize.compactTarget + NativeSpace.sm
     }
     private func renderEvent() {
-        guard let editor else { return }
+        guard let editor else {
+            if let id = deleteOperation, state.pending.contains(where: { $0.id == id && $0.phase == .unknown }) {
+                paragraph("overlay.delete.unknown", text("event.delete_unknown")); row("overlay.delete.refresh", label: text("accounts.refresh"))
+            }
+            return
+        }
+        if let stage = deleteStage {
+            switch stage {
+            case .discardDraft:
+                paragraph("overlay.delete.explanation", text("event.delete_discard_prompt"))
+                row("overlay.delete.cancel", label: text("event.delete_keep"))
+                row("overlay.delete.discard", label: text("event.delete_discard"))
+            case .confirm:
+                let occurrence = editor.original.map { $0.item.recurring || $0.detached } ?? false
+                paragraph("overlay.delete.explanation", text(occurrence ? "event.delete_confirm_occurrence" : "event.delete_confirm"))
+                row("overlay.delete.cancel", label: text("event.delete_cancel"))
+                row("overlay.delete.confirm", label: text(occurrence ? "event.delete_occurrence" : "event.delete"), enabled: !busy && canDelete(editor))
+                renderItems[renderItems.count - 1].color = .danger
+            }
+            return
+        }
+        if deleteFinished { paragraph("overlay.delete.partial", text("event.delete_partial")); return }
+        if let id = deleteOperation, state.pending.contains(where: { $0.id == id && $0.phase == .unknown }) {
+            paragraph("overlay.delete.unknown", text("event.delete_unknown"))
+            row("overlay.delete.refresh", label: text("accounts.refresh"))
+            return
+        }
         let sourceEditable = !editor.isReadOnly && editor.metadataRetryID == nil && !busy
         if case .newEvent = route { row("overlay.kind", label: text("quick.kind") + ": " + text("quick.kind_" + quickKind), enabled: !busy) }
         if editor.isReadOnly { paragraph("overlay.readonly", text("event.readonly_hint")) }
@@ -421,9 +490,11 @@ import AppKit
             date("start", key: "calendar.date", value: editor.event.start, enabled: !busy && (quickKind != "project" || projectHasTarget), time: false)
         }
         let saveKey = editor.metadataRetryID != nil ? "error.partial_retry" : quickKind == "project" ? "projects.submit_add" : quickKind == "countdown" ? "deadlines.submit_add" : editor.isReadOnly ? "event.save_link" : editor.original == nil ? "event.submit_add" : "event.save_changes"
+        if canDelete(editor) { row("overlay.delete", label: text("event.delete"), enabled: !busy); renderItems[renderItems.count - 1].color = .danger }
         row("overlay.save", label: text(busy ? "toast.event_saving" : saveKey), enabled: !busy, fill: .fill)
         if unknownOperation != nil { row("overlay.reconcile", label: text("error.retry_action")) }
-        row("overlay.cancel", label: text("event.cancel"))
+        if case .newEvent = route { row("overlay.cancel", label: text("event.cancel")) }
+        else { y += NativeSize.overflowEdge }
     }
     private func renderSearch() {
         let value = state.drafts[.search]?.textValue?.text ?? state.view.query
@@ -557,10 +628,21 @@ import AppKit
     }
     func activate(_ id: String) {
         guard !disposed else { return }
+        if let stage = deleteStage {
+            let allowed = id == "overlay.close" || id == "overlay.delete.cancel" ||
+                (stage == .discardDraft && id == "overlay.delete.discard") ||
+                (stage == .confirm && id == "overlay.delete.confirm")
+            guard allowed else { return }
+        }
         if let action = itemActions[id] { action(); return }
         switch id {
-        case "overlay.close": requestDismiss()
+        case "overlay.close": if deleteStage != nil { cancelDelete() } else { requestDismiss() }
         case "overlay.cancel": cancelDraft()
+        case "overlay.delete": beginDelete()
+        case "overlay.delete.cancel": cancelDelete()
+        case "overlay.delete.discard": discardForDelete()
+        case "overlay.delete.confirm": confirmDelete()
+        case "overlay.delete.refresh": refresh()
         case "overlay.more": moreDetails.toggle(); layout(in: host.bounds)
         case "overlay.allday":
             guard editor?.isReadOnly == false, !busy else { return }; editor?.event.allDay.toggle()
@@ -716,6 +798,60 @@ import AppKit
     private var composing: Bool {
         notes.hasMarkedText() || textFields.values.contains { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }
     }
+    private func canDelete(_ draft: EventOverlayDraft) -> Bool {
+        guard case .event = route, let original = draft.original, !deleteFinished,
+              state.snapshot.calendarAuthorization == .authorized,
+              let current = state.snapshot.calendar.records.first(where: { $0.id == original.id }), current.item.writable,
+              state.snapshot.calendar.calendars.contains(where: { $0.id == current.item.calendarID && $0.writable }) else { return false }
+        return true
+    }
+    private func setDeleteStage(_ stage: DeleteStage, focus id: String) {
+        deleteStage = stage; inlineMessage = nil; render()
+        host.window?.makeFirstResponder(content); context.focus.focus(FocusID(id))
+    }
+    private func beginDelete() {
+        guard !busy, !composing, let draft = editor, let original = draft.original, canDelete(draft) else { return }
+        let baseline = EventOverlayDraft(record: original, snapshot: state.snapshot)
+        let changed = draft.event != original.draft || draft.projectID != baseline.projectID || draft.pinned != baseline.pinned
+        setDeleteStage(changed ? .discardDraft : .confirm, focus: "overlay.delete.cancel")
+    }
+    private func cancelDelete() {
+        guard deleteStage != nil else { return }
+        deleteStage = nil; render(); host.window?.makeFirstResponder(content); context.focus.focus(FocusID("overlay.delete"))
+    }
+    private func discardForDelete() {
+        guard deleteStage == .discardDraft, !busy, !composing, let original = editor?.original, let draft = editor, canDelete(draft) else { return }
+        context.presentation.clearDraft(draft.key)
+        editor = EventOverlayDraft(record: original, snapshot: state.snapshot)
+        setDeleteStage(.confirm, focus: "overlay.delete.cancel")
+    }
+    private func confirmDelete() {
+        guard deleteStage == .confirm, !busy, !composing, let draft = editor, let original = draft.original, canDelete(draft) else { return }
+        busy = true; deleteStage = nil; inlineMessage = nil; render()
+        guard let handle = context.presentation.send(.command(.deleteEvent(EventIdentity(id: original.id), expectedVersion: original.version))) else { busy = false; render(); return }
+        deleteOperation = handle.id; ownsDeleteReceipt = true
+        let presentation = context.presentation
+        let submittedDraft = draft.savedDraft
+        Task { [weak self, weak presentation] in
+            let receipt = await handle.settled.value
+            if case .success(.eventDeleted, _) = receipt, let presentation,
+               presentation.state.drafts[draft.key]?.eventEditorValue == submittedDraft { presentation.clearDraft(draft.key) }
+            guard let self, !self.disposed, case .event(let currentID, _) = self.route, currentID == original.id else { return }
+            self.ownsDeleteReceipt = false
+            switch receipt {
+            case .success(.eventDeleted(let result), _):
+                self.deleteOperation = nil; self.busy = false; self.draftCommitted = true
+                if result.metadataStatus == .failed { self.deleteFinished = true; self.inlineMessage = self.text("event.delete_partial"); self.render() }
+                else { self.requestDismiss() }
+            case .failure(let failure, _):
+                if failure.committed == .unknown {
+                    self.deleteOperation = handle.id; self.busy = true; self.inlineMessage = self.text("event.delete_unknown"); self.render()
+                } else { self.deleteOperation = nil; self.busy = false; self.showFailure(failure) }
+            default:
+                self.deleteOperation = nil; self.busy = false; self.showFailure(AppFailure(code: .invalidResponse))
+            }
+        }
+    }
     private func saveDraft() { if !draftCommitted, let editor { context.presentation.setDraft(editor.key, value: .eventEditor(editor.savedDraft)) } }
     private func cancelDraft() {
         guard !composing else { return }
@@ -724,7 +860,7 @@ import AppKit
         requestDismiss()
     }
     private func save() {
-        guard !busy, !composing, let editor else { return }
+        guard deleteStage == nil, !busy, !composing, let editor else { return }
         let command: BoardCommand
         if quickKind != "event" {
             guard !editor.event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { showFailure(AppFailure(code: .validationFailed, messageKey: "error.empty_name")); return }
@@ -831,6 +967,7 @@ import AppKit
             targets.append(target)
         }
         focusOrder = [FocusID("overlay.close")] + ordering.sorted { $0.0 < $1.0 }.map(\.1)
+        if surface.items.contains(where: { $0.id == "overlay.cancel" }) { focusOrder.append(FocusID("overlay.cancel")) }
         context.focus.register(owner: self, targets: targets)
     }
     private func moveFocus(forward: Bool) {
@@ -843,7 +980,7 @@ import AppKit
         }
         let id = focusOrder[next]
         if content.items.contains(where: { $0.id == id.rawValue }) { host.window?.makeFirstResponder(content) }
-        else if id == FocusID("overlay.close") { host.window?.makeFirstResponder(surface) }
+        else if surface.items.contains(where: { $0.id == id.rawValue }) { host.window?.makeFirstResponder(surface) }
         context.focus.focus(id)
     }
     @objc private func dateChanged(_ picker: NativeDatePicker) {
@@ -870,7 +1007,7 @@ import AppKit
             return showSelectionMenu(id.rawValue)
         }
         if event.keyCode == 48 { moveFocus(forward: !event.modifierFlags.contains(.shift)); return true }
-        if event.keyCode == 53 { requestDismiss(); return true }
+        if event.keyCode == 53 { if deleteStage != nil { cancelDelete() } else { requestDismiss() }; return true }
         if event.modifierFlags.contains(.command), event.keyCode == 36 { save(); return true }
         if route == .search {
             if event.keyCode == 125 { moveSearch(1); return true }

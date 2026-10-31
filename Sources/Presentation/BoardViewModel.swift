@@ -41,6 +41,7 @@ import Foundation
     private var recovery: [Entry] = []
     private var handles: [UUID: OperationHandle] = [:]
     private var observers: [(UUID, @MainActor (PresentationChange) -> Void)] = []
+    private var reconciling: Set<UUID> = []
     private var observation: ObservationToken?
     private var notesTimer: ObservationToken?
     private var toastTimer: ObservationToken?
@@ -223,6 +224,7 @@ import Foundation
         else {
             switch command {
             case .saveEvent(.calendarEdit(let identity, _, _, _)), .saveEvent(.metadataOnly(let identity, _)): affected = [.event(identity.id)]
+            case .deleteEvent(let identity, _): affected = [.event(identity.id)]
             case .saveEvent(.calendarCreate): affected = [.event("pending:" + id.uuidString.lowercased())]
             case .notification(.subscription(let id), _): affected = [.subscription(id)]
             case .notification(.focus, _), .setLogin, .focus: affected = [.settings]
@@ -280,7 +282,15 @@ import Foundation
         rebuild(); watch(handle); publish([.board, .pending, .toast]); return handle
     }
     @discardableResult func reconcile(_ id: UUID) -> Result<OperationStatus, AppFailure>? {
+        // Publishing an error synchronously can notify a subscriber that is already
+        // reconciling this operation. The nested lookup has no safe new result.
+        guard reconciling.insert(id).inserted else { return nil }
+        defer { reconciling.remove(id) }
         let result = application.result(of: id, sessionID: base.sessionID)
+        if entries.contains(where: { entry in
+            guard entry.id == id, entry.phase == .unknown, let command = entry.command else { return false }
+            if case .deleteEvent = command { return true }; return false
+        }) { return result }
         switch result {
         case .success(.completed(let receipt)): settle(id, receipt: receipt)
         case .success(.notFound):
@@ -361,6 +371,9 @@ import Foundation
                 setError(saved.warning)
                 for i in entries.indices where entries[i].undoSource == id { entries[i].eventInverse?.after = saved.savedEvent }
             }
+            if case .eventDeleted(let deleted) = result, deleted.metadataStatus == .failed {
+                setError(AppFailure(code: .storageWriteFailed, messageKey: "event.delete_partial", committed: .yes))
+            }
             if case .notification(let result) = result, entry.previousPreference == result.enabled, state.toast?.source == id { state.toast = nil; undoPreview = nil }
             if case .undone(let result) = result { setError(result.warning) }
         }
@@ -436,7 +449,12 @@ import Foundation
         }
         // Unsaved notes remain a draft and the projection, including during IME composition.
         if let notes = state.drafts[.notes]?.textValue { state.snapshot.board.notes = notes.text }
-        state.pending = entries.map { PendingOperation(id: $0.id, kind: $0.undoSource == nil ? "command" : "undo", phase: $0.phase, affected: $0.affected) }
+        state.pending = entries.map { entry in
+            let kind: String
+            if case .deleteEvent = entry.command { kind = "deleteEvent" }
+            else { kind = entry.undoSource == nil ? "command" : "undo" }
+            return PendingOperation(id: entry.id, kind: kind, phase: entry.phase, affected: entry.affected)
+        }
         state.activity.saving = entries.contains { !$0.affected.isEmpty }
         state.activity.refreshing = entries.contains { switch $0.command { case .refresh, .connect: true; default: false } }
     }

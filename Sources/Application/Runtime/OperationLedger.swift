@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 enum NativeOperation: Hashable, Sendable {
-    case load, refresh, connect, saveBoard, saveEvent, requestUndo, undoCreate, undoEvent, invalidateUndo
+    case load, refresh, connect, saveBoard, saveEvent, deleteEvent, requestUndo, undoCreate, undoEvent, invalidateUndo
     case open, diagnostics, readAudit, setLogin, uiReady, focus, notification, refreshExternal, listCities, openAttribution
     init(_ command: BoardCommand) {
         switch command {
@@ -10,6 +10,7 @@ enum NativeOperation: Hashable, Sendable {
         case .connect: self = .connect
         case .edit: self = .saveBoard
         case .saveEvent: self = .saveEvent
+        case .deleteEvent: self = .deleteEvent
         case .undoCreate: self = .undoCreate
         case .undoEvent: self = .undoEvent
         case .invalidateUndo: self = .invalidateUndo
@@ -27,7 +28,7 @@ enum NativeOperation: Hashable, Sendable {
     }
     var writes: Bool {
         switch self {
-        case .saveBoard, .saveEvent, .requestUndo, .undoCreate, .undoEvent, .setLogin, .focus, .notification: true
+        case .saveBoard, .saveEvent, .deleteEvent, .requestUndo, .undoCreate, .undoEvent, .setLogin, .focus, .notification: true
         default: false
         }
     }
@@ -232,6 +233,8 @@ enum NativeOperation: Hashable, Sendable {
                 writer.text("edit"); writer.text(id.id); writer.text(version); writer.event(draft); writer.metadata(patch)
             case .metadataOnly(let id, let patch): writer.text("metadata"); writer.text(id.id); writer.metadata(patch)
             }
+        case .deleteEvent(let identity, let version):
+            writer.text("deleteEvent"); writer.text(identity.id); writer.text(version)
         case .refresh(let range, let sources):
             writer.text("refresh"); writer.scalar(range.month); writer.scalar(range.visibleStart); writer.scalar(range.endExclusive)
             writer.optional(range.selectedDay) { $0.scalar($1) }; writer.text(range.mode.rawValue); writer.scalar(sources)

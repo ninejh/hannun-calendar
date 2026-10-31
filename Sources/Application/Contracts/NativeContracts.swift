@@ -209,6 +209,12 @@ struct EventSaveResult: Sendable {
     var warning: AppFailure? = nil
     var undo: UndoDescriptor? = nil
 }
+struct EventDeleteResult: Sendable {
+    var deletedID: String
+    var calendarWritten: Bool
+    var metadataStatus: MetadataStatus
+    var warning: AppFailure? = nil
+}
 struct UndoResult: Sendable {
     var undone: Bool
     var sourceCommitted: Commitment
@@ -251,7 +257,7 @@ struct ReadAudit: Sendable {
 }
 enum CommandResult: Sendable {
     case loaded, refreshed, connected
-    case boardSaved(BoardSaveResult), eventSaved(EventSaveResult), undone(UndoResult), undoInvalidated
+    case boardSaved(BoardSaveResult), eventSaved(EventSaveResult), eventDeleted(EventDeleteResult), undone(UndoResult), undoInvalidated
     case opened(OSRequestTarget), diagnostics(Diagnostics), audit(ReadAudit), login(LoginStatus), ready
     case focus(FocusCommandResult), notification(NotificationPreferenceResult)
     case externalAccepted(ExternalRefreshResult), cities([City]), attributionOpened

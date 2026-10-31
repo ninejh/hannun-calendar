@@ -11,6 +11,27 @@ private final class CalendarRefreshCapture {
     var order = 0
 }
 
+private struct DeleteSourceIdentity {
+    let calendarID: String
+    let itemIdentifier: String
+    let recurring: Bool
+    let occurrenceDate: Date?
+    init(_ record: EventRecord) {
+        calendarID = record.item.calendarID
+        itemIdentifier = record.item.itemIdentifier
+        recurring = record.item.recurring || record.detached
+        occurrenceDate = record.occurrenceDate
+    }
+    func mayMatch(_ other: DeleteSourceIdentity) -> Bool {
+        guard calendarID == other.calendarID, itemIdentifier == other.itemIdentifier else { return false }
+        if recurring && other.recurring, let occurrenceDate, let otherDate = other.occurrenceDate {
+            return occurrenceDate == otherDate
+        }
+        // Missing or changed recurrence information cannot safely distinguish occurrences.
+        return true
+    }
+}
+
 /// Composition injects logical bounds before the first load and may supply them on a later Retry.
 /// The provider returns Foundation values only; persistence never queries screens or UI objects.
 struct NativeViewportStateFile: BoardPersistence {
@@ -45,6 +66,7 @@ struct NativeViewportStateFile: BoardPersistence {
     private var projectionWarning: AppFailure?
     private var tokens: [UndoToken: UUID] = [:]
     private var createdIDs = Set<String>()
+    private var blockedDeletes: [UUID: (id: String, source: DeleteSourceIdentity?)] = [:]
     private var initialized = false
     private var budgetInitialized = false
     private var initialization: Task<Void, Never>?
@@ -180,7 +202,16 @@ struct NativeViewportStateFile: BoardPersistence {
         case .notification: undoable = true
         default: undoable = false
         }
+        if case .deleteEvent(let identity, _) = command {
+            let source = calendars.find(identity.id).map(DeleteSourceIdentity.init)
+            if blockedDeletes.values.contains(where: { $0.id == identity.id || (source != nil && $0.source.map { source!.mayMatch($0) } == true) }) {
+                return rejected(context.id, AppFailure(code: .busyRetry))
+            }
+        }
         guard ledger.count < (operation.writes ? 20000 : 21000) else { return rejected(context.id, AppFailure(code: .busyRetry)) }
+        if case .deleteEvent(let identity, _) = command {
+            blockedDeletes[context.id] = (identity.id, calendars.find(identity.id).map(DeleteSourceIdentity.init))
+        }
         let entry = record(context, digest: digest, operation: operation, undoable: undoable)
         do {
             // Off admission is synchronous, validated against this durable revision, and token scoped.
@@ -251,9 +282,11 @@ struct NativeViewportStateFile: BoardPersistence {
             if let failure = testControls.takeFailure(entry.operation) { throw failure }
 #endif
             let result = try await perform(command, entry: entry)
+            if case .deleteEvent = command { blockedDeletes.removeValue(forKey: entry.context.id) }
             finish(entry, .success(result, snapshot: nil))
         } catch {
             let error = NativeRuntimeErrors.normalize(error)
+            if case .deleteEvent = command, error.committed != .unknown { blockedDeletes.removeValue(forKey: entry.context.id) }
             if entry.operation != .connect && ([.eventConflict, .eventNotFound, .calendarPermission].contains(error.code) || error.committed == .unknown) {
                 await calendars.refresh(ranges: ranges, now: preferences.now, refreshSources: true)
             }
@@ -365,6 +398,9 @@ struct NativeViewportStateFile: BoardPersistence {
             return .boardSaved(BoardSaveResult(revision: store.state.boardRevision, deletedRefs: removed,
                                                 undo: entry.undoable && changed ? descriptor(entry, kind: .board) : nil, revealedSlotID: revealed))
         case .saveEvent(let input): try requireRevision(entry); return .eventSaved(try await saveEvent(input, entry: entry))
+        case .deleteEvent(let identity, let version):
+            try requireRevision(entry)
+            return .eventDeleted(try await deleteEvent(identity, expectedVersion: version, operationID: entry.context.id))
         case .focus(let command):
             try requireRevision(entry); _ = try panels.focus.command(command)
             publishServiceWarning(nil)
@@ -751,6 +787,39 @@ struct NativeViewportStateFile: BoardPersistence {
         let fresh = try await calendars.current(original!, checkVersion: false)
         try store.commit(NativeBoardMutator.metadata(patch, on: store.state, old: original, saved: fresh))
         return EventSaveResult(savedEvent: fresh, calendarWritten: false, metadataStatus: .saved)
+    }
+    private func deleteEvent(_ identity: EventIdentity, expectedVersion: String, operationID: UUID) async throws -> EventDeleteResult {
+        guard store.canSave else { throw AppFailure(code: .storageProtected) }
+        guard !identity.id.isEmpty, !expectedVersion.isEmpty else { throw AppFailure(code: .invalidRequest) }
+        try await calendars.requireDeletionAccess()
+        guard let original = calendars.find(identity.id) else { throw AppFailure(code: .eventNotFound) }
+        guard original.version == expectedVersion else { throw AppFailure(code: .eventConflict) }
+        let source = DeleteSourceIdentity(original)
+        guard !blockedDeletes.contains(where: { $0.key != operationID && $0.value.source.map { source.mayMatch($0) } == true }) else {
+            throw AppFailure(code: .busyRetry)
+        }
+        blockedDeletes[operationID] = (identity.id, source)
+        let key = original.pinKey
+        let pin = store.state.pinnedEventKeys.contains(key)
+        let link = store.state.eventProjectLinks[key]
+        let ambiguous = calendars.records.contains { $0.id != original.id && $0.pinKey == key }
+        try await calendars.deleteEvent(original)
+        var status = MetadataStatus.saved
+        var warning: AppFailure?
+        let unchanged = store.state.pinnedEventKeys.contains(key) == pin && store.state.eventProjectLinks[key] == link
+        if !unchanged || (ambiguous && (pin || link != nil)) {
+            status = .failed
+            warning = AppFailure(code: .boardConflict, messageKey: "error.partial_eventkit")
+        } else if pin || link != nil {
+            var next = store.state
+            next.pinnedEventKeys.remove(key); next.eventProjectLinks.removeValue(forKey: key)
+            do { try store.commit(next) }
+            catch {
+                status = .failed
+                warning = AppFailure(code: .storageWriteFailed, messageKey: "error.partial_eventkit")
+            }
+        }
+        return EventDeleteResult(deletedID: identity.id, calendarWritten: true, metadataStatus: status, warning: warning)
     }
     private func remapCreated(original: EventRecord, saved: EventRecord) {
         guard createdIDs.remove(original.id) != nil else { return }

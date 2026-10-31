@@ -69,6 +69,12 @@ protocol CalendarWorkerProtocol: Sendable {
     func current(_ original: EventRecord, checkVersion: Bool) async throws -> EventRecord
     func save(_ draft: EventDraft, original: EventRecord?) async throws -> EventRecord
     func removeCreated(_ original: EventRecord) async throws
+    func deleteEvent(_ original: EventRecord) async throws
+}
+
+// Existing adapters without deletion support fail closed; deletion is never an undo alias.
+extension CalendarWorkerProtocol {
+    func deleteEvent(_ original: EventRecord) async throws { throw NativeFailure(code: "CALENDAR_UNAVAILABLE") }
 }
 
 /// EKEvent, EKCalendar and the store never leave this actor.
@@ -175,6 +181,36 @@ actor CalendarWorker: CalendarWorkerProtocol {
         do { try store.remove(event, span: .thisEvent, commit: true) }
         catch {
             let unchanged = occurrence(original).map { Self.record($0).version == original.version } ?? false
+            throw NativeFailure(code: "CALENDAR_WRITE_FAILED", committed: unchanged ? .no : .unknown)
+        }
+    }
+    func deleteEvent(_ original: EventRecord) throws {
+        let access = authorization()
+        guard access.authorized else {
+            throw NativeFailure(code: access == .unavailable ? "CALENDAR_UNAVAILABLE" : "CALENDAR_PERMISSION")
+        }
+        store.refreshSourcesIfNecessary()
+        func exact() -> [EKEvent] {
+            let start = original.item.start
+            let query = store.predicateForEvents(withStart: start.addingTimeInterval(-86400), end: start.addingTimeInterval(86400), calendars: nil)
+            return store.events(matching: query).filter {
+                $0.calendar.calendarIdentifier == original.item.calendarID &&
+                $0.calendarItemIdentifier == original.item.itemIdentifier &&
+                abs($0.startDate.timeIntervalSince(start)) < 0.001 &&
+                $0.occurrenceDate == original.occurrenceDate && $0.status != .canceled
+            }
+        }
+        let matches = exact()
+        guard matches.count == 1, let event = matches.first else {
+            throw NativeFailure(code: matches.isEmpty ? "EVENT_NOT_FOUND" : "EVENT_CONFLICT")
+        }
+        guard Self.record(event).version == original.version else { throw NativeFailure(code: "EVENT_CONFLICT") }
+        guard event.calendar.allowsContentModifications else { throw NativeFailure(code: "CALENDAR_READ_ONLY") }
+        do { try store.remove(event, span: .thisEvent, commit: true) }
+        catch {
+            store.refreshSourcesIfNecessary()
+            let after = exact()
+            let unchanged = authorization().authorized && after.count == 1 && Self.record(after[0]).version == original.version
             throw NativeFailure(code: "CALENDAR_WRITE_FAILED", committed: unchanged ? .no : .unknown)
         }
     }
@@ -373,6 +409,30 @@ final class CalendarService: ObservableObject {
         #if HANNUN_TESTING
         if let syntheticStore { try syntheticStore.save(records: records.filter { $0.id != record.id }, removing: true) }
         #endif
+        generation += 1; loading = false
+        records.removeAll { $0.id == record.id }; retained.removeValue(forKey: record.id)
+    }
+    func requireDeletionAccess() async throws {
+        let access = if let worker { await worker.authorization() } else { accessState }
+        guard access.authorized else {
+            throw NativeFailure(code: access == .unavailable ? "CALENDAR_UNAVAILABLE" : "CALENDAR_PERMISSION")
+        }
+    }
+    func deleteEvent(_ record: EventRecord) async throws {
+        guard records.filter({ $0.id == record.id }).count <= 1 else { throw NativeFailure(code: "EVENT_CONFLICT") }
+        generation += 1; loading = false
+        if let worker { try await worker.deleteEvent(record) }
+        else {
+            guard authorized else { throw NativeFailure(code: accessState == .unavailable ? "CALENDAR_UNAVAILABLE" : "CALENDAR_PERMISSION") }
+            guard let fresh = find(record.id) else { throw NativeFailure(code: "EVENT_NOT_FOUND") }
+            guard fresh.version == record.version else { throw NativeFailure(code: "EVENT_CONFLICT") }
+            guard fresh.item.writable, calendars.first(where: { $0.id == fresh.item.calendarID })?.writable == true else {
+                throw NativeFailure(code: "CALENDAR_READ_ONLY")
+            }
+        }
+#if HANNUN_TESTING
+        if let syntheticStore { try syntheticStore.save(records: records.filter { $0.id != record.id }, removing: true) }
+#endif
         generation += 1; loading = false
         records.removeAll { $0.id == record.id }; retained.removeValue(forKey: record.id)
     }
