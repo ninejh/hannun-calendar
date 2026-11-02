@@ -10,11 +10,22 @@ struct StableAnchor: Equatable, Sendable {
     var returnFocusID: FocusID? = nil
 }
 struct AddRequest: Equatable, Sendable {
-    enum Kind: String, Sendable { case event, countdown, project }
+    enum Kind: String, Sendable { case event, countdown, project, todo }
     var kind: Kind
     var day: DateOnly? = nil
     var projectID: UUID? = nil
+    var todoID: UUID? = nil
     var anchor: StableAnchor? = nil
+}
+/// One displayed todo maps to one expected-state completion command across all entry points.
+enum TodoActions {
+    static func completion(_ todo: Todo) -> PanelIntent? {
+        if let rule = todo.recurrence {
+            guard let due = todo.dueDate else { return nil }
+            return .completeTodoOccurrence(todo.id, scheduleID: rule.scheduleID, expectedDue: due)
+        }
+        return .updateTodo(todo.id, TodoPatch(completed: !todo.completed, expectedCompleted: todo.completed))
+    }
 }
 enum PanelReveal: Equatable, Sendable {
     case day(DateOnly), item(String), scrollTo(FocusID)

@@ -200,13 +200,14 @@ import AppKit
             if self?.commonAction(key) == true { return }
             guard let self, let id = Self.id(key), let value = self.snapshot.board.todos.first(where: { $0.id == id }) else { return }
             if key.hasSuffix(".check") {
-                self.edit(.updateTodo(id, TodoPatch(completed: !value.completed)))
+                guard let intent = TodoActions.completion(value) else { self.showStatus("todo.invalid_date"); return }
+                self.edit(intent)
                 self.layoutSubtreeIfNeeded()
                 if value.completed { self.contentCanvas.stopFeedback() }
                 else { self.contentCanvas.checkFeedback(id: key, reduceMotion: self.snapshot.environment.reduceMotion) }
             }
             else if key.hasSuffix(".delete") { self.edit(.deleteTodo(id)) }
-            else { self.openTextEditor(id: id, title: value.title) }
+            else { self.openTodoEditor(value, sourceID: key) }
         }
         contentCanvas.contextMenu = { [weak self] key in
             guard let self, let id = Self.id(key), let value = self.snapshot.board.todos.first(where: { $0.id == id }) else { return nil }
@@ -214,7 +215,7 @@ import AppKit
                 NativeMenuEntry(id: "edit", title: self.context.text("item.edit_label", values: ["0": value.title])),
                 NativeMenuEntry(id: "delete", title: self.context.text("item.delete_label", values: ["0": value.title]))
             ]) { [weak self] action in
-                if action == "delete" { self?.edit(.deleteTodo(id)) } else { self?.openTextEditor(id: id, title: value.title) }
+                if action == "delete" { self?.edit(.deleteTodo(id)) } else { self?.openTodoEditor(value, sourceID: key) }
             }
         }
         start()
@@ -226,6 +227,10 @@ import AppKit
             return true
         }
         return super.commonAction(id)
+    }
+    private func openTodoEditor(_ todo: Todo, sourceID: String) {
+        let anchor = StableAnchor(target: .control(sourceID), boardRect: .zero, returnFocusID: FocusID(sourceID))
+        context.routing.route(.openAdd(AddRequest(kind: .todo, todoID: todo.id, anchor: anchor)))
     }
     private static func id(_ key: String) -> UUID? { key.split(separator: ".").dropFirst().first.flatMap { UUID(uuidString: String($0)) } }
     override func layoutContent() {
@@ -242,25 +247,34 @@ import AppKit
         let rowHeight = isCompactStep ? (stepMetrics.listRow?.height ?? NativeSize.compactTarget) : NativeSize.toolbarHeight
         let gap = isCompactStep ? (stepMetrics.listRow?.gap ?? 0) : 0
         var items: [NativeRenderItem] = []
+        let compactToggleHeight: CGFloat = isCompactStep && count > 0 ? NativeSize.compactTarget + stepMetrics.itemGap : 0
+        if compactToggleHeight > 0 {
+            var item = collapseItem; item.rect = CGRect(x: 0, y: 0, width: scroll.contentSize.width, height: NativeSize.compactTarget)
+            items.append(item)
+        }
         contentCanvas.fonts = [:]; contentCanvas.struck = []; contentCanvas.displayText = [:]; contentCanvas.wrappedText = [:]
         for (index, value) in values.enumerated() {
             let key = "todo.\(value.id)"
-            let x = CGFloat(index % columns) * width, y = NativeSpace.xs + CGFloat(index / columns) * (rowHeight + gap)
-            items.append(NativeRenderItem(id: key + ".check", rect: CGRect(x: x, y: y, width: NativeSize.compactTarget, height: rowHeight), label: value.title, kind: .checkBox, checked: value.completed))
+            let x = CGFloat(index % columns) * width, y = compactToggleHeight + NativeSpace.xs + CGFloat(index / columns) * (rowHeight + gap)
+            let pending = context.presentation.state.pending.contains { $0.affected.contains(.todo(value.id)) }
+            items.append(NativeRenderItem(id: key + ".check", rect: CGRect(x: x, y: y, width: NativeSize.compactTarget, height: rowHeight), label: value.title, kind: .checkBox, enabled: !pending, checked: value.completed))
             contentCanvas.displayText[key + ".check"] = ""
-            items.append(NativeRenderItem(id: key + ".title", rect: CGRect(x: x + NativeSize.compactTarget, y: y, width: max(0, width - NativeSize.compactTarget * 2), height: rowHeight), label: value.title, kind: .row, color: value.completed ? .textQuiet : .textPrimary))
+            var detail: [String] = []
+            if let due = value.dueDate {
+                let dateKey = due < snapshot.clock.today && !value.completed ? "todo.due_overdue" : due == snapshot.clock.today ? "todo.due_today" : "todo.due_on"
+                detail.append(context.text(dateKey, values: ["0": due.description]))
+            }
+            if let rule = value.recurrence { detail.append(context.text("todo.every_" + rule.frequency.rawValue, values: ["0": String(rule.interval)])) }
+            let title = ([value.title] + detail).joined(separator: " · ")
+            items.append(NativeRenderItem(id: key + ".title", rect: CGRect(x: x + NativeSize.compactTarget, y: y, width: max(0, width - NativeSize.compactTarget * 2), height: rowHeight), label: title, kind: .row, color: value.completed ? .textQuiet : .textPrimary))
             contentCanvas.fonts[key + ".title"] = isCompactStep ? stepMetrics.bodyFont : NativeFont.primary
             if value.completed { contentCanvas.struck.insert(key + ".title") }
             items.append(NativeRenderItem(id: key + ".delete", rect: CGRect(x: x + width - NativeSize.compactTarget, y: y, width: NativeSize.compactTarget, height: rowHeight), label: context.text("item.delete_label", values: ["0": value.title]), kind: .button, color: .textQuiet))
             contentCanvas.displayText[key + ".delete"] = "×"
         }
-        if values.isEmpty { items.append(NativeRenderItem(id: "todos.empty", rect: CGRect(x: 0, y: NativeSpace.sm, width: scroll.contentSize.width, height: NativeSize.toolbarHeight), label: context.text(snapshot.board.todos.isEmpty ? "todo.empty_new" : "todo.empty"), kind: .text, color: .textQuiet)) }
-        var height = CGFloat((values.count + columns - 1) / columns) * (rowHeight + gap) + NativeSpace.sm
+        if values.isEmpty { items.append(NativeRenderItem(id: "todos.empty", rect: CGRect(x: 0, y: compactToggleHeight + NativeSpace.sm, width: scroll.contentSize.width, height: NativeSize.toolbarHeight), label: context.text(snapshot.board.todos.isEmpty ? "todo.empty_new" : "todo.empty"), kind: .text, color: .textQuiet)) }
+        var height = compactToggleHeight + CGFloat((values.count + columns - 1) / columns) * (rowHeight + gap) + NativeSpace.sm
         if values.isEmpty { height += NativeSize.toolbarHeight }
-        if isCompactStep && count > 0 {
-            var item = collapseItem; item.rect = CGRect(x: 0, y: height, width: scroll.contentSize.width, height: NativeSize.compactTarget)
-            items.append(item); height = item.rect.maxY + stepMetrics.itemGap
-        }
         let status = contentStatusItems(at: height); items += status
         height = max(height, status.map(\.rect.maxY).max() ?? height)
         contentCanvas.frame.size = CGSize(width: scroll.contentSize.width, height: max(scroll.contentSize.height, height))

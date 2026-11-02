@@ -75,6 +75,7 @@ import AppKit
     private var outsideMonitorGeneration: UUID?
     private var trackingMenus: Set<ObjectIdentifier> = []
     private var consumeGridMouseUp = false
+    private var consumeGridDismissUp: NSEvent.EventType?
     private var surfaceTimer: Timer?
     private struct InteractionState: Equatable {
         let layout: BoardLayout
@@ -490,7 +491,8 @@ import AppKit
             guard event.clickCount == 1, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
                   let item = directMoveItem(at: event.locationInWindow) else { return event }
             directMoveContact = DirectMoveContact(item: item, start: workspace.convert(event.locationInWindow, from: nil))
-            return event
+            consumeGridMouseUp = true
+            return nil
         }
         guard var contact = directMoveContact else { return event }
         if event.type == .leftMouseDragged {
@@ -506,7 +508,8 @@ import AppKit
         }
         if event.type == .leftMouseUp {
             directMoveContact = nil
-            guard contact.active else { return event }
+            consumeGridMouseUp = false
+            guard contact.active else { toggleGridEditing(); return nil }
             finishGrid(point: workspace.convert(event.locationInWindow, from: nil), handle: nil); return nil
         }
         if [.rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown].contains(event.type) { cancelDirectMove() }
@@ -909,10 +912,11 @@ import AppKit
         guard event.window === window else {
             cancelDirectMove()
             if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
-                consumeSurfaceMouseUp = false
+                consumeSurfaceMouseUp = false; consumeGridMouseUp = false; consumeGridDismissUp = nil
             }
             return event
         }
+        if event.type == consumeGridDismissUp { consumeGridDismissUp = nil; return nil }
         if filterDirectMove(event) == nil { return nil }
         if event.type == .leftMouseUp, consumeSurfaceMouseUp { consumeSurfaceMouseUp = false; return nil }
         if event.type == .leftMouseUp { cancelSurfaceHold() }
@@ -932,6 +936,21 @@ import AppKit
             if isHandle || isToggle || isBackground || isPanelHeader || isHoldSurface || isDirectSurface {
                 consumeGridMouseUp = true
                 if isToggle { deferredOverlayAction = .toggleGrid }
+                return nil
+            }
+        }
+        if editingGrid, activeOverlay == nil, gridInteraction == nil, trackingMenus.isEmpty,
+           gridTool?.popover.isShown != true, bounds.contains(point),
+           [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+            let target = hitTest(superview.map { convert(point, to: $0) } ?? point)
+            let canvas = target as? NativeCanvasView
+            let item = canvas?.item(at: canvas!.convert(event.locationInWindow, from: nil))
+            let isEditControl = target is GridHandleView || item?.panelHeader != nil ||
+                (target === calendarView && item?.id == "action.layout") || item?.splitter != nil
+            if !isEditControl {
+                if event.type == .leftMouseDown { consumeGridMouseUp = true }
+                else { consumeGridDismissUp = event.type == .rightMouseDown ? .rightMouseUp : .otherMouseUp }
+                if composingEditor == nil { toggleGridEditing() }
                 return nil
             }
         }
@@ -1112,7 +1131,7 @@ import AppKit
             if let toast = state.toast, toast.messageKey == "error.partial_eventkit" {
                 message = context.text(toast.messageKey, values: toast.values) + "\n" + message
             }
-            items.append(NativeRenderItem(id: "board.error", rect: CGRect(x: 0, y: 0, width: NativeSize.searchWidth, height: NativeSize.toolbarHeight + NativeSpace.lg), label: message, kind: .text, fill: .toastBg, color: .danger))
+            items.append(NativeRenderItem(id: "board.error", rect: CGRect(x: 0, y: 0, width: NativeSize.searchWidth, height: NativeSize.toolbarHeight + NativeSpace.lg), label: message, kind: .text, fill: .toastBg, color: .toastDanger))
         } else if let toast = state.toast, !Self.routineFeedbackKeys.contains(toast.messageKey) {
             let message = context.text(toast.messageKey, values: toast.values)
             items.append(NativeRenderItem(id: "board.toast", rect: CGRect(x: 0, y: 0, width: NativeSize.searchWidth, height: NativeSize.toolbarHeight + NativeSpace.lg), label: message, kind: .text, fill: .toastBg, color: .toastText))
@@ -1122,7 +1141,7 @@ import AppKit
         }
         if items.isEmpty && state.snapshot.board.layout.migrationNoticePending {
             items.append(NativeRenderItem(id: "board.migration", rect: CGRect(x: 0, y: 0, width: NativeSize.searchWidth, height: NativeSize.toolbarHeight + NativeSpace.lg), label: context.text("grid.migration"), kind: .text, fill: .toastBg, color: .toastText))
-            items.append(NativeRenderItem(id: "action.dismissMigration", rect: CGRect(x: NativeSize.searchWidth - NativeSize.popoverWidth / 3, y: NativeSpace.sm, width: NativeSize.popoverWidth / 3 - NativeSpace.sm, height: NativeSize.toolbarHeight), label: context.text("grid.dismiss"), kind: .button, color: .accentBlue))
+            items.append(NativeRenderItem(id: "action.dismissMigration", rect: CGRect(x: NativeSize.searchWidth - NativeSize.popoverWidth / 3, y: NativeSpace.sm, width: NativeSize.popoverWidth / 3 - NativeSpace.sm, height: NativeSize.toolbarHeight), label: context.text("grid.dismiss"), kind: .button, fill: .fill, color: .toastText))
         }
         feedbackBaseItems = items; layoutFeedback()
         if !items.isEmpty { NSAccessibility.post(element: feedback, notification: .valueChanged) }
@@ -1167,12 +1186,12 @@ import AppKit
         let message = feedbackBaseItems.first(where: { !$0.isInteractive })?.label ?? ""
         var displayed = feedbackBaseItems
         for index in displayed.indices {
-            displayed[index].fill = nil
             if displayed[index].isInteractive {
                 displayed[index].rect = CGRect(x: frame.width - actionWidth, y: NativeSpace.sm, width: actionWidth, height: NativeSize.toolbarHeight)
                 displayed[index].minimumTarget = 44
                 displayed[index].value = message
             } else {
+                displayed[index].fill = nil
                 displayed[index].rect = CGRect(x: 0, y: 0, width: max(0, frame.width - actionWidth), height: frame.height)
             }
         }

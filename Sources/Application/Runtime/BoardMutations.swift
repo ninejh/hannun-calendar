@@ -61,6 +61,7 @@ import Foundation
                 case .delete(let id):
                     guard next.projects.contains(where: { $0.id == id }) else { throw AppFailure(code: .unknownProject) }
                     next.projects.removeAll { $0.id == id }
+                    for i in next.todos.indices where next.todos[i].projectID == id { next.todos[i].projectID = nil }
                     next.eventProjectLinks = next.eventProjectLinks.filter { $0.value.lowercased() != id.uuidString.lowercased() }
                 }
             case .countdown(let value):
@@ -136,7 +137,8 @@ import Foundation
                 switch intent {
                 case .createSubscription(let input): panel = .subscriptions; id = input.id
                 case .updateSubscription(let value, _), .deleteSubscription(let value): panel = .subscriptions; id = value
-                case .createTodo(let value, _), .updateTodo(let value, _), .deleteTodo(let value): panel = .todos; id = value
+                case .createTodo(let value, _), .updateTodo(let value, _), .deleteTodo(let value), .completeTodoOccurrence(let value, _, _): panel = .todos; id = value
+                case .createTodoDetailed(let value): panel = .todos; id = value.id
                 case .createHabit(let value, _), .updateHabit(let value, _), .setHabitToday(let value, _, _), .deleteHabit(let value): panel = .habits; id = value
                 case .addCity, .deleteCity: panel = .worldClock; id = nil
                 default: panel = .today; id = nil
@@ -192,7 +194,7 @@ import Foundation
         records(\.projects, before: before, after: after, id: { $0.id })
         records(\.milestones, before: before, after: after, id: { $0.id })
         records(\.subscriptions, before: before, after: after, id: { $0.id })
-        records(\.todos, before: before, after: after, id: { $0.id })
+        todoRecords(before: before, after: after)
         records(\.habits, before: before, after: after, id: { $0.id })
         records(\.worldClockCities, before: before, after: after, id: { $0.id })
         membership(\.pinnedEventKeys, before: before, after: after)
@@ -260,6 +262,25 @@ import Foundation
                 if had { board[keyPath: key].insert(value) } else { board[keyPath: key].remove(value) }
             }
         }
+    }
+    private func todoRecords(before: BoardState, after: BoardState) {
+        let removedProjects = Set(before.projects.map(\.id)).subtracting(after.projects.map(\.id))
+        let savedByID = Dictionary(uniqueKeysWithValues: after.todos.map { ($0.id, $0) })
+        var handled = Set<UUID>()
+        for old in before.todos {
+            guard let project = old.projectID, removedProjects.contains(project),
+                  let saved = savedByID[old.id], saved.projectID == nil else { continue }
+            var same = old; same.projectID = nil
+            guard same == saved else { continue }
+            handled.insert(old.id)
+            changes.append { board in
+                guard let index = board.todos.firstIndex(where: { $0.id == old.id }), board.todos[index].projectID == nil else { throw AppFailure(code: .boardConflict) }
+                board.todos[index].projectID = project
+            }
+        }
+        var old = before, saved = after
+        old.todos.removeAll { handled.contains($0.id) }; saved.todos.removeAll { handled.contains($0.id) }
+        records(\.todos, before: old, after: saved, id: { $0.id })
     }
     private func records<T: Equatable, ID: Hashable>(_ key: WritableKeyPath<BoardState, [T]>, before: BoardState, after: BoardState,
                                                     id: @escaping (T) -> ID) {

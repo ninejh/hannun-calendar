@@ -283,9 +283,26 @@ final class NativeAXElement: NSAccessibilityElement {
         invalidate(previous)
     }
     func paint(_ item: NativeRenderItem) {
-        let highlighted = drawsInteractionFeedback && (item.id == hoverID || item.id == pressedID)
-        let fill = highlighted ? (item.fill == .fill ? NativeColorToken.fillHover : .hover) : item.fill
-        if let fill { theme.color(fill).setFill(); NSBezierPath(roundedRect: item.rect, xRadius: item.radius, yRadius: item.radius).fill() }
+        let highlighted = item.enabled && drawsInteractionFeedback && (item.id == hoverID || item.id == pressedID)
+        let fill = highlighted ? (item.fill == .fill ? NativeColorToken.fillHover : item.fill == .timerBreak ? .timerBreak : .hover) : item.fill
+        let disabledSelection = !item.enabled && item.isInteractive && (item.fill == .fill || item.fill == .timerBreak || item.fill == .selected)
+        if let fill {
+            var background = theme.color(fill)
+            if disabledSelection {
+                let tint: NativeColorToken = fill == .selected ? .panel : .textQuiet
+                background = background.blended(withFraction: 0.2, of: theme.color(tint)) ?? background
+                if fill != .selected && (theme.appearance == .light || fill == .fill) {
+                    let darker: NativeColorToken = theme.appearance == .dark ? .bg : .textPrimary
+                    background = background.blended(withFraction: 0.2, of: theme.color(darker)) ?? background
+                }
+            }
+            background.setFill(); NSBezierPath(roundedRect: item.rect, xRadius: item.radius, yRadius: item.radius).fill()
+        }
+        if highlighted && item.fill == .timerBreak {
+            theme.color(.timerBreakText).withAlphaComponent(0.55).setStroke()
+            let outline = NSBezierPath(roundedRect: item.rect.insetBy(dx: 1, dy: 1), xRadius: item.radius, yRadius: item.radius)
+            outline.lineWidth = 2; outline.stroke()
+        }
         var textRect = item.rect.insetBy(dx: NativeSpace.sm, dy: 0)
         if item.kind == .checkBox {
             let box = CGRect(x: item.rect.minX + NativeSpace.xs, y: item.rect.midY - NativeSpace.sm, width: NativeSpace.lg, height: NativeSpace.lg)
@@ -301,7 +318,10 @@ final class NativeAXElement: NSAccessibilityElement {
         let height = font.pointSize * 1.2
         textRect.origin.y = item.rect.midY - height / 2; textRect.size.height = height
         NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: item.rect).addClip()
-        (item.label as NSString).draw(in: textRect, withAttributes: NativeFont.attributes(font: font, color: theme.color(item.enabled ? item.color : .textQuiet), lineHeight: height))
+        let textColor: NativeColorToken
+        if disabledSelection { textColor = item.fill == .fill ? .toastText : item.fill == .timerBreak ? .timerBreakText : .textPrimary }
+        else { textColor = !item.enabled ? .textQuiet : item.fill == .fill && item.color == .textPrimary ? .toastText : item.color }
+        (item.label as NSString).draw(in: textRect, withAttributes: NativeFont.attributes(font: font, color: theme.color(textColor), lineHeight: height))
         NSGraphicsContext.restoreGraphicsState()
         if drawsInteractionFeedback, focus.keyboardFocus, focus.focusedID == item.focusID {
             theme.color(.accentBlue).setStroke()

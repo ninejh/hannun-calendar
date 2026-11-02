@@ -24,6 +24,7 @@ struct PreviewInverse {
     private var countdowns: [RecordRestore<Milestone>]
     private var subscriptions: [RecordRestore<Subscription>]
     private var todos: [RecordRestore<Todo>]
+    private var todoProjectLinks: [(id: UUID, before: UUID?, after: UUID?)]
     private var habits: [RecordRestore<Habit>]
     private var cities: [RecordRestore<WorldClockCity>]
     private var layout: (BoardLayout, BoardLayout)?
@@ -36,7 +37,17 @@ struct PreviewInverse {
         projects = RecordRestore.changes(before.projects, after.projects)
         countdowns = RecordRestore.changes(before.milestones, after.milestones)
         subscriptions = RecordRestore.changes(before.subscriptions, after.subscriptions)
-        todos = RecordRestore.changes(before.todos, after.todos); habits = RecordRestore.changes(before.habits, after.habits)
+        let deletedProjects = Set(before.projects.map(\.id)).subtracting(after.projects.map(\.id))
+        todoProjectLinks = before.todos.compactMap { old in
+            guard let project = old.projectID, deletedProjects.contains(project),
+                  let current = after.todos.first(where: { $0.id == old.id }), current.projectID == nil else { return nil }
+            var otherwise = current; otherwise.projectID = old.projectID
+            guard otherwise == old else { return nil }
+            return (id: old.id, before: old.projectID, after: current.projectID)
+        }
+        let linkIDs = Set(todoProjectLinks.map(\.id))
+        todos = RecordRestore.changes(before.todos, after.todos).filter { !linkIDs.contains($0.id) }
+        habits = RecordRestore.changes(before.habits, after.habits)
         cities = RecordRestore.changes(before.worldClockCities, after.worldClockCities)
         let changedItems = GridItemID.allCases.filter { before.layout.placements[$0] != after.layout.placements[$0] }
         var beforeWithoutPositions = before.layout, afterWithoutPositions = after.layout
@@ -55,6 +66,12 @@ struct PreviewInverse {
         }
     }
     func apply(to board: inout BoardState) {
+        // A deleted or reassigned todo makes this project-deletion Undo conflict;
+        // avoid previewing a partial restore that the authoritative operation rejects.
+        guard todoProjectLinks.allSatisfy({ link in board.todos.first(where: { $0.id == link.id }).map { $0.projectID == link.after } ?? false }) else { return }
+        for link in todoProjectLinks {
+            if let index = board.todos.firstIndex(where: { $0.id == link.id }) { board.todos[index].projectID = link.before }
+        }
         for v in projects { v.restore(&board.projects) }; for v in countdowns { v.restore(&board.milestones) }
         for v in subscriptions {
             v.restore(&board.subscriptions) { current, expected in

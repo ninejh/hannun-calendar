@@ -1,10 +1,5 @@
 import Foundation
 
-enum FieldChange<Value: Sendable>: Sendable {
-    case unchanged
-    case set(Value)
-}
-extension FieldChange: Equatable where Value: Equatable {}
 
 struct ProjectInput: Sendable, Equatable {
     var id: UUID
@@ -109,7 +104,7 @@ enum BoardCommand: Sendable, Equatable {
 extension EventDraft: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.title == rhs.title && lhs.start == rhs.start && lhs.end == rhs.end && lhs.allDay == rhs.allDay &&
-        lhs.calendarID == rhs.calendarID && lhs.location == rhs.location && lhs.notes == rhs.notes
+        lhs.calendarID == rhs.calendarID && lhs.location == rhs.location && lhs.notes == rhs.notes && lhs.recurrence == rhs.recurrence
     }
 }
 extension SubscriptionInput: Equatable {
@@ -125,7 +120,7 @@ extension SubscriptionPatch: Equatable {
     }
 }
 extension TodoPatch: Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.title == rhs.title && lhs.completed == rhs.completed }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.title == rhs.title && lhs.completed == rhs.completed && lhs.expectedCompleted == rhs.expectedCompleted && lhs.dueDate == rhs.dueDate && lhs.projectID == rhs.projectID && lhs.recurrence == rhs.recurrence }
 }
 extension FocusCommand: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -159,6 +154,8 @@ extension PanelIntent: Equatable {
         case (.createTodo(let a, let x), .createTodo(let b, let y)),
              (.createHabit(let a, let x), .createHabit(let b, let y)),
              (.updateHabit(let a, let x), .updateHabit(let b, let y)): a == b && x == y
+        case (.createTodoDetailed(let a), .createTodoDetailed(let b)): a == b
+        case (.completeTodoOccurrence(let a, let x, let d), .completeTodoOccurrence(let b, let y, let e)): a == b && x == y && d == e
         case (.updateTodo(let a, let x), .updateTodo(let b, let y)): a == b && x == y
         case (.setHabitToday(let a, let x, let d), .setHabitToday(let b, let y, let e)): a == b && x == y && d == e
         case (.addCity(let a), .addCity(let b)), (.deleteCity(let a), .deleteCity(let b)): a == b

@@ -293,8 +293,16 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     }
     private func configureMainMenu() {
         let menu = NSMenu(), item = NSMenuItem(), appMenu = NSMenu()
+        appMenu.delegate = self; appMenu.autoenablesItems = false
+        item.title = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Hannun Calendar"
+        let about = appMenu.addItem(withTitle: text("menu.about"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        about.target = NSApp
+        appMenu.addItem(.separator())
         add(appMenu, "menu.show_board", #selector(showAction), key: "0")
         add(appMenu, "menu.settings", #selector(settingsAction), key: ",")
+        let update = add(appMenu, "menu.check_updates", #selector(checkUpdatesAction))
+        update.isEnabled = updater?.canCheckForUpdates == true
+        appMenu.addItem(.separator())
         add(appMenu, "menu.quit", #selector(quitAction), key: "q")
         item.submenu = appMenu; menu.addItem(item)
         let edit = NSMenu(title: text("menu.edit")), editItem = NSMenuItem()
@@ -302,7 +310,12 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
             let command = edit.addItem(withTitle: text("menu." + key), action: #selector(editingAction(_:)), keyEquivalent: shortcut)
             command.target = self; command.representedObject = action
         }
-        editItem.submenu = edit; menu.addItem(editItem); mainMenu = menu; NSApp.mainMenu = menu
+        editItem.submenu = edit; menu.addItem(editItem)
+        let help = NSMenu(title: text("menu.help")), helpItem = NSMenuItem()
+        add(help, "menu.show_board", #selector(showAction))
+        add(help, "menu.settings", #selector(settingsAction))
+        helpItem.submenu = help; menu.addItem(helpItem)
+        mainMenu = menu; NSApp.mainMenu = menu; NSApp.helpMenu = help
     }
     @discardableResult private func add(_ menu: NSMenu, _ key: String, _ action: Selector, key shortcut: String = "") -> NSMenuItem {
         let item = menu.addItem(withTitle: text(key), action: action, keyEquivalent: shortcut); item.target = self; return item
@@ -464,7 +477,7 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
         guard !disposed else { return }; disposed = true; isReady = false
         NotificationCenter.default.removeObserver(self); observation?.cancel(); observation = nil
         application.stop(); root.dispose(); presentation.dispose()
-        if NSApp.mainMenu === mainMenu { NSApp.mainMenu = nil }; mainMenu = nil
+        if NSApp.mainMenu === mainMenu { NSApp.helpMenu = nil; NSApp.mainMenu = nil }; mainMenu = nil
         for item in statusMenu.items { item.target = nil }; statusMenu.removeAllItems()
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }; statusItem = nil
         panel.delegate = nil; panel.orderOut(nil); panel.contentView = nil; panel.close()
@@ -474,6 +487,7 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     let composition: NativeAppComposition
     private let onReady: (@MainActor (NativeAppComposition) async -> Void)?
+    var activateForReopen: @MainActor () -> Void = { NSApp.activate(ignoringOtherApps: true) }
     private var terminating = false
     init(composition: NativeAppComposition, onReady: (@MainActor (NativeAppComposition) async -> Void)? = nil) {
         self.composition = composition; self.onReady = onReady; super.init()
@@ -481,7 +495,9 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in await self.composition.start(); await self.onReady?(self.composition) }
     }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { composition.showBoard(); return true }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        composition.showBoard(); activateForReopen(); return false
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if terminating { return .terminateCancel }; terminating = true
@@ -520,7 +536,7 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     @MainActor static func main() { launch() }
 #endif
     @MainActor private static func launch() {
-        let app = NSApplication.shared; app.setActivationPolicy(.accessory)
+        let app = NSApplication.shared
         do {
             let delegate = try makeDelegate(arguments: CommandLine.arguments)
             app.delegate = delegate

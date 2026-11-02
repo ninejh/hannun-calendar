@@ -1,5 +1,12 @@
 import Foundation
 
+enum FieldChange<Value: Sendable>: Sendable {
+    case unchanged
+    case set(Value)
+}
+extension FieldChange: Equatable where Value: Equatable {}
+
+
 struct PanelDomainError: Error, Equatable, Sendable {
     enum Code: String, Sendable {
         case validationFailed = "VALIDATION_FAILED", boardConflict = "BOARD_CONFLICT", dayChanged = "DAY_CHANGED"
@@ -28,14 +35,27 @@ struct SubscriptionPatch: Sendable {
     var paymentMemo: String? = nil
     var isEmpty: Bool { name == nil && nextDate == nil && cycle == nil && amount == nil && currency == nil && paymentMemo == nil }
 }
+struct TodoInput: Sendable, Equatable {
+    var id: UUID
+    var title: String
+    var dueDate: DateOnly? = nil
+    var projectID: UUID? = nil
+    var recurrence: TodoRecurrence? = nil
+}
 struct TodoPatch: Sendable {
     var title: String? = nil
     var completed: Bool? = nil
+    var expectedCompleted: Bool? = nil
+    var dueDate: FieldChange<DateOnly?> = .unchanged
+    var projectID: FieldChange<UUID?> = .unchanged
+    var recurrence: FieldChange<TodoRecurrence?> = .unchanged
 }
+
 enum PanelIntent: Sendable {
     case selectSlot(SlotID, PanelID), setSlotVisible(SlotID, Bool), setPanelVisible(PanelID, Bool), revealAgenda, resetLayout
     case createSubscription(SubscriptionInput), updateSubscription(UUID, SubscriptionPatch), deleteSubscription(UUID)
-    case createTodo(UUID, String), updateTodo(UUID, TodoPatch), deleteTodo(UUID)
+    case createTodo(UUID, String), createTodoDetailed(TodoInput), updateTodo(UUID, TodoPatch), deleteTodo(UUID)
+    case completeTodoOccurrence(UUID, scheduleID: UUID, expectedDue: DateOnly)
     case createHabit(UUID, String), updateHabit(UUID, String), setHabitToday(UUID, Bool, DateOnly), deleteHabit(UUID)
     case addCity(String), deleteCity(String)
 }
@@ -135,13 +155,52 @@ enum PanelDomain {
             next.subscriptions.remove(at: try index(next.subscriptions, id)); deleted.subscriptions = [id]
         case let .createTodo(id, raw):
             try unique(next.todos, id); next.todos.append(Todo(id: id, title: try title(raw), createdAt: now))
-        case let .updateTodo(id, patch):
-            guard patch.title != nil || patch.completed != nil else { throw PanelDomainError(code: .validationFailed) }
-            let i = try index(next.todos, id)
-            if let raw = patch.title { next.todos[i].title = try title(raw) }
-            if let completed = patch.completed, next.todos[i].completed != completed {
-                next.todos[i].completed = completed; next.todos[i].completedAt = completed ? now : nil
+        case let .createTodoDetailed(input):
+            try unique(next.todos, input.id)
+            guard input.projectID == nil || next.projects.contains(where: { $0.id == input.projectID }) else {
+                throw PanelDomainError(code: .validationFailed, field: "projectID")
             }
+            if let rule = input.recurrence {
+                guard input.dueDate == rule.anchor, (1...999).contains(rule.interval) else { throw PanelDomainError(code: .validationFailed, field: "recurrence") }
+            }
+            next.todos.append(Todo(id: input.id, title: try title(input.title), createdAt: now, dueDate: input.dueDate, projectID: input.projectID, recurrence: input.recurrence))
+        case let .updateTodo(id, patch):
+            let hasFields = patch.title != nil || patch.dueDate != .unchanged || patch.projectID != .unchanged || patch.recurrence != .unchanged
+            guard hasFields || patch.completed != nil else { throw PanelDomainError(code: .validationFailed) }
+            guard patch.completed == nil || !hasFields else { throw PanelDomainError(code: .validationFailed) }
+            let i = try index(next.todos, id)
+            var value = next.todos[i]
+            if let expected = patch.expectedCompleted, expected != value.completed { throw PanelDomainError(code: .boardConflict) }
+            if let raw = patch.title { value.title = try title(raw) }
+            if case .set(let project) = patch.projectID {
+                guard project == nil || next.projects.contains(where: { $0.id == project }) else { throw PanelDomainError(code: .validationFailed, field: "projectID") }
+                value.projectID = project
+            }
+            if case .set(let due) = patch.dueDate { value.dueDate = due }
+            if case .set(let rule) = patch.recurrence {
+                if let rule {
+                    guard !value.completed, value.dueDate == rule.anchor, (1...999).contains(rule.interval),
+                          value.recurrence == rule || value.recurrence?.scheduleID != rule.scheduleID else { throw PanelDomainError(code: .validationFailed, field: "recurrence") }
+                }
+                value.recurrence = rule
+            } else if value.recurrence != nil && value.dueDate != next.todos[i].dueDate {
+                throw PanelDomainError(code: .validationFailed, field: "recurrence")
+            }
+            if let completed = patch.completed {
+                guard value.recurrence == nil else { throw PanelDomainError(code: .validationFailed, field: "completed") }
+                if value.completed != completed { value.completed = completed; value.completedAt = completed ? now : nil }
+            }
+            next.todos[i] = value
+        case let .completeTodoOccurrence(id, scheduleID, expectedDue):
+            let i = try index(next.todos, id)
+            guard let rule = next.todos[i].recurrence, rule.scheduleID == scheduleID, next.todos[i].dueDate == expectedDue else {
+                throw PanelDomainError(code: .boardConflict)
+            }
+            let newDue: DateOnly
+            do { newDue = try rule.next(after: expectedDue, today: today) }
+            catch { throw PanelDomainError(code: .validationFailed, field: "dueDate") }
+            next.todos[i].completionHistory.append(TodoCompletion(dueDate: expectedDue, completedAt: now, scheduleID: scheduleID))
+            next.todos[i].dueDate = newDue
         case let .deleteTodo(id): next.todos.remove(at: try index(next.todos, id)); deleted.todos = [id]
         case let .createHabit(id, raw):
             try unique(next.habits, id); next.habits.append(Habit(id: id, title: try title(raw), createdOn: today))
@@ -222,26 +281,6 @@ enum PanelDomain {
     }
 }
 
-extension DateOnly {
-    /// Ordinal arithmetic is independent of DST, local time and 86400-second durations.
-    func addingDays(_ count: Int) -> DateOnly? {
-        let sum = ordinal.addingReportingOverflow(count)
-        guard !sum.overflow, (1...3_652_059).contains(sum.partialValue) else { return nil }
-        let target = sum.partialValue
-        var lower = 1, upper = 9999
-        while lower < upper {
-            let middle = (lower + upper + 1) / 2
-            let first = DateOnly(String(format: "%04d-01-01", middle))!
-            if first.ordinal <= target { lower = middle } else { upper = middle - 1 }
-        }
-        for month in 1...12 {
-            for day in 1...31 {
-                if let value = DateOnly(String(format: "%04d-%02d-%02d", lower, month, day)), value.ordinal == target { return value }
-            }
-        }
-        return nil
-    }
-}
 
 struct PanelMetadata: Codable, Equatable, Sendable {
     var currencyMinorUnits = PanelCurrency.minorUnits

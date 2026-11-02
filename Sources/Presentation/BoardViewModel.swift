@@ -1,5 +1,16 @@
 import Foundation
 
+/// Stable stored colors, chosen only when a new project is submitted.
+enum ProjectPalette {
+    static let colors = ["0F734C", "6F42C1", "8E5900", "BE2B3A", "A64918", "126A9F", "A4376C", "1C5ED2"]
+    static func next(among projects: [Project]) -> String {
+        let counts = projects.reduce(into: [String: Int]()) { result, project in
+            result[project.colorHex.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased(), default: 0] += 1
+        }
+        return colors.min { counts[$0, default: 0] < counts[$1, default: 0] } ?? colors[0]
+    }
+}
+
 @MainActor final class BoardViewModel: BoardPresentation {
     private struct Entry {
         var id: UUID
@@ -217,7 +228,12 @@ import Foundation
         if case .edit(let value, let undo) = command { edit = value; undoable = undo }
         else {
             edit = nil
-            switch command { case .saveEvent(.metadataOnly): undoable = false; case .saveEvent, .notification: undoable = true; default: undoable = false }
+            switch command {
+            case .saveEvent(.metadataOnly): undoable = false
+            case .saveEvent(.calendarCreate(let draft, _)): undoable = draft.recurrence == nil
+            case .saveEvent, .notification: undoable = true
+            default: undoable = false
+            }
         }
         let affected: [AffectedID]
         if let edit { affected = BoardPreview.affected(edit) }
@@ -248,6 +264,11 @@ import Foundation
             if case .saveEvent(let input) = command { eventInverse = EventPreviewInverse(input: input, operationID: id, before: state.snapshot.calendar, after: projected.calendar) }
             undoPreview = UndoPreview(source: id, affected: affected, inverse: PreviewInverse(before: state.snapshot.board, after: projected.board), eventInverse: eventInverse, deadline: deadline.overflow ? Int64.max : deadline.partialValue)
             state.toast = PresentationToast(source: id, messageKey: feedback.messageKey, values: feedback.values, continuousDeadlineMilliseconds: undoPreview!.deadline, undoable: true)
+            toastTimer?.cancel(); toastTimer = scheduler.schedule(after: 8) { [weak self] in self?.expireToast(force: true) }
+        } else if case .saveEvent(.calendarCreate(let draft, _)) = command, draft.recurrence != nil {
+            undoPreview = nil
+            let deadline = base.clock.continuousMilliseconds.addingReportingOverflow(8000)
+            state.toast = PresentationToast(source: id, messageKey: feedback.messageKey, values: feedback.values, continuousDeadlineMilliseconds: deadline.overflow ? Int64.max : deadline.partialValue, undoable: false)
             toastTimer?.cancel(); toastTimer = scheduler.schedule(after: 8) { [weak self] in self?.expireToast(force: true) }
         }
         let focusAdmittedAt: Instant?
@@ -344,6 +365,7 @@ import Foundation
         switch receipt {
         case .failure(let error, _):
             receiveFailure(error, from: entry); entry.failure = error
+            if state.toast?.source == id, state.toast?.undoable == false { state.toast = nil; toastTimer?.cancel(); toastTimer = nil }
             if error.committed == .unknown {
                 entries[i].phase = .unknown; entries[i].failure = error
                 rebuild(); publish([.pending, .error], affected: Set(entry.affected)); return
@@ -452,6 +474,8 @@ import Foundation
         state.pending = entries.map { entry in
             let kind: String
             if case .deleteEvent = entry.command { kind = "deleteEvent" }
+            else if case .edit(.panel(.completeTodoOccurrence), _) = entry.command { kind = "todoCompletion" }
+            else if case .edit(.panel(.updateTodo(_, let patch)), _) = entry.command, patch.completed != nil { kind = "todoCompletion" }
             else { kind = entry.undoSource == nil ? "command" : "undo" }
             return PendingOperation(id: entry.id, kind: kind, phase: entry.phase, affected: entry.affected)
         }
@@ -493,9 +517,10 @@ import Foundation
         return await application.flush()
     }
     private func expireToast(force: Bool = false) {
-        guard let undo = undoPreview, force || base.clock.continuousMilliseconds >= undo.deadline else { return }
+        guard let deadline = undoPreview?.deadline ?? state.toast?.continuousDeadlineMilliseconds,
+              force || base.clock.continuousMilliseconds >= deadline else { return }
         state.toast = nil
-        if !undo.requested { undoPreview = nil }
+        if undoPreview?.requested == false { undoPreview = nil }
         toastTimer?.cancel(); toastTimer = nil; publish([.toast])
     }
     private func apply(_ command: BoardCommand, operationID: UUID, focusAdmittedAt: Instant? = nil, projectionSchedules: [UUID: UUID] = [:], to snapshot: inout BoardSnapshot) {

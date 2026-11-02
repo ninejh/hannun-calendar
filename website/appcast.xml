@@ -5,15 +5,15 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Hannun Calendar</title>
         <item>
             <title>1.0</title>
-            <pubDate>Sat, 31 Oct 2026 18:33:21 +0900</pubDate>
-            <sparkle:version>2</sparkle:version>
+            <pubDate>Tue, 03 Nov 2026 01:41:58 +0900</pubDate>
+            <sparkle:version>3</sparkle:version>
             <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.7/Hannun-Calendar-arm64.zip" length="3503418" type="application/octet-stream" sparkle:edSignature="6QHMGZeAL9m+EC9RPHdfsnLS1ty7pEPVS3Zb0uLQSr4MxJ4Z0Agjj67VfjIvU8C0ZVO2gqYymo9cyvHzrJzxBg=="></enclosure>
+            <enclosure url="https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.9/Hannun-Calendar-arm64.zip" length="3669642" type="application/octet-stream" sparkle:edSignature="A2sq2CF8SdXCNGVLCu9BpdLOKPq30Yk5+K/g1D/AfzSL4oRvLPKQz1pxLaQe0HIbHJWJp0yvKK8/RDYZN8/zDQ=="></enclosure>
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: o11kXSI1WrqKtlbTeQI+W6tHg+mpnKkKq0B0qTz0YoX7OvU95II/8xSGLvQOJFExeTg+ZkxRQZ3/Cj5UUwRfDA==
+edSignature: 28TrNOUuySNEp4EDbLsQ1y3xnv8Zdfl7c0I8W1+jnx0BNRmr+389Tiun2vsJz0xrOUMM+lyiYfCxZY7J+r73Bg==
 length: 1142
 -->

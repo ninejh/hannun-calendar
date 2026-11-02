@@ -8,13 +8,13 @@ Move and resize the calendar and four configurable panels on a free grid. Hold a
 
 ## Beta download
 
-The prepared release is **v1.0.0-beta.8**, for Apple Silicon and macOS 14 or later. The app and DMG are **Developer ID signed, Apple notarized and stapled**. The ZIP contains the same stapled app. Strict signature, ticket and Gatekeeper checks passed for these exact artifacts. The app is version **1.0**, build **2**.
+Hannun Calendar **v1.0.0-beta.9** targets Apple Silicon and macOS 14 or later. The app version is **1.0**, build **3**.
 
-When the release is published, versions through beta.6 need to download and install beta.8 manually once; they do not include the updater. Later update checks run automatically, and installation requires your choice.
+Versions through beta.6 do not include the updater and need one manual installation of an updater-equipped release. Later checks run automatically; installation requires your choice.
 
-[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.8/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.8/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.8/SHA256SUMS)
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.9/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.9/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.9/SHA256SUMS)
 
-Storage protection and write failures use specific messages when the previous message was generic. Storage protection, save outcomes, retry and recovery behavior are preserved. This does not establish the cause or resolution of any previously reported real-account error. An isolated signed update test preserved a synthetic note, but installation of the clean beta.8 ZIP and upgrades of real user data remain unverified. Real EventKit connectivity, clean-account first launch and physical keyboard/VoiceOver also remain unverified. See [INSTALL.md](INSTALL.md).
+This is an early beta. Back up important calendar and board data before updating. See the release notes for exact artifact verification, changes, and known limitations. Real-account connectivity and upgrading real user data have not been verified in this preparation. See [INSTALL.md](INSTALL.md).
 
 ## Build from source
 

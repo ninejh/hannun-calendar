@@ -36,6 +36,39 @@ struct EventRecord: Equatable, Sendable {
                    calendarID: item.calendarID, location: item.location, notes: item.notes)
     }
 }
+enum EventRecurrenceFrequency: String, Sendable { case daily, weekly, monthly, yearly }
+enum EventRecurrenceEnd: Equatable, Sendable { case never, onDate(DateOnly) }
+struct EventRecurrenceDraft: Equatable, Sendable {
+    var frequency: EventRecurrenceFrequency
+    var interval: Int = 1
+    var end: EventRecurrenceEnd = .never
+    var timeZoneIdentifier: String
+
+    /// The last instant on the selected civil day, in the captured zone.
+    func resolved(start: Date) throws -> (TimeZone, EKRecurrenceRule) {
+        guard (1...999).contains(interval), let zone = TimeZone(identifier: timeZoneIdentifier),
+              let startDay = DateOnly(date: start, timeZone: zone) else {
+            throw AppFailure(code: .validationFailed, field: .event(.recurrence))
+        }
+        let recurrenceEnd: EKRecurrenceEnd?
+        switch end {
+        case .never: recurrenceEnd = nil
+        case .onDate(let day):
+            guard day >= startDay else { throw AppFailure(code: .invalidDate, field: .event(.recurrenceEnd)) }
+            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
+            guard let noon = calendar.date(from: DateComponents(era: 1, year: day.year, month: day.month, day: day.day, hour: 12)),
+                  DateOnly(date: noon, timeZone: zone) == day,
+                  let interval = calendar.dateInterval(of: .day, for: noon) else {
+                throw AppFailure(code: .invalidDate, field: .event(.recurrenceEnd))
+            }
+            let last = Date(timeIntervalSinceReferenceDate: interval.end.timeIntervalSinceReferenceDate.nextDown)
+            recurrenceEnd = EKRecurrenceEnd(end: last)
+        }
+        let kind: EKRecurrenceFrequency
+        switch frequency { case .daily: kind = .daily; case .weekly: kind = .weekly; case .monthly: kind = .monthly; case .yearly: kind = .yearly }
+        return (zone, EKRecurrenceRule(recurrenceWith: kind, interval: interval, end: recurrenceEnd))
+    }
+}
 struct EventDraft: Sendable {
     var title = ""
     var start = Date()
@@ -44,6 +77,7 @@ struct EventDraft: Sendable {
     var calendarID = ""
     var location = ""
     var notes = ""
+    var recurrence: EventRecurrenceDraft? = nil
 }
 struct QueryRange: Sendable, Equatable {
     var start: Date
@@ -148,6 +182,8 @@ actor CalendarWorker: CalendarWorkerProtocol {
     }
     func save(_ draft: EventDraft, original: EventRecord?) throws -> EventRecord {
         guard authorization().authorized else { throw NativeFailure(code: "CALENDAR_PERMISSION") }
+        guard original == nil || draft.recurrence == nil else { throw AppFailure(code: .validationFailed, field: .event(.recurrence)) }
+        let recurrence = try draft.recurrence.map { try $0.resolved(start: draft.start) }
         store.refreshSourcesIfNecessary()
         let event: EKEvent
         if let original {
@@ -163,6 +199,7 @@ actor CalendarWorker: CalendarWorkerProtocol {
         event.title = draft.title; event.startDate = draft.start; event.endDate = draft.end
         event.isAllDay = draft.allDay; event.calendar = target
         event.location = draft.location; event.notes = draft.notes
+        if let recurrence { event.timeZone = recurrence.0; event.addRecurrenceRule(recurrence.1) }
         do { try store.save(event, span: .thisEvent, commit: true) }
         catch {
             // A throwing EventKit commit is not proof of rollback. Only an unchanged refetch proves no write.
@@ -361,6 +398,8 @@ final class CalendarService: ObservableObject {
         return fresh
     }
     func save(_ draft: EventDraft, original: EventRecord?) async throws -> EventRecord {
+        guard original == nil || draft.recurrence == nil else { throw AppFailure(code: .validationFailed, field: .event(.recurrence)) }
+        _ = try draft.recurrence.map { try $0.resolved(start: draft.start) }
         generation += 1; loading = false
 #if HANNUN_TESTING
         if demo && testSaveDelay > 0 { let delay = testSaveDelay; testSaveDelay = 0; try await Task.sleep(for: .milliseconds(delay)) }
@@ -382,6 +421,7 @@ final class CalendarService: ObservableObject {
             item.calendarID = source.id; item.calendarTitle = source.title; item.colorHex = source.colorHex
             item.title = draft.title; item.start = draft.start; item.end = draft.end; item.allDay = draft.allDay
             item.location = draft.location; item.notes = draft.notes
+            if original == nil { item.recurring = draft.recurrence != nil }
             saved = EventRecord(item: item, occurrenceDate: original?.occurrenceDate, lastModified: original?.lastModified,
                                 detached: original?.detached ?? false, fixtureID: original?.fixtureID,
                                 fixturePinKey: original?.fixturePinKey, serial: (original?.serial ?? 0) + 1)

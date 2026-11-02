@@ -8,16 +8,29 @@ struct TextDraft: Equatable, Sendable {
     var isComposing: Bool { markedRange.map { $0.location != NSNotFound } ?? false }
 }
 enum DraftKey: Hashable, Sendable {
-    case notes, search, project(UUID), countdown(UUID), event(String), subscription(UUID), todo(UUID), habit(UUID)
+    case notes, search, project(UUID), countdown(UUID), event(String), subscription(UUID), todo(UUID), todoNew(DateOnly?, UUID?), habit(UUID)
 }
 struct EventEditorDraft: Equatable, Sendable {
     var event: EventDraft
     var metadata: MetadataPatch = MetadataPatch()
     var expectedVersion: String? = nil
+    var repeatIntervalText: String? = nil
+}
+struct TodoEditorDraft: Equatable, Sendable {
+    var id: UUID
+    var original: Todo?
+    var title: TextDraft
+    var dueText: String
+    var hasDueDate: Bool
+    var projectID: UUID?
+    var frequency: TodoFrequency?
+    var intervalText: String
+    var newScheduleID: UUID
 }
 enum DraftValue: Equatable, Sendable {
-    case text(TextDraft), event(EventDraft), eventEditor(EventEditorDraft), project(ProjectInput), countdown(CountdownInput), subscription(SubscriptionInput)
+    case text(TextDraft), event(EventDraft), eventEditor(EventEditorDraft), project(ProjectInput), countdown(CountdownInput), subscription(SubscriptionInput), todoEditor(TodoEditorDraft)
     var eventEditorValue: EventEditorDraft? { if case .eventEditor(let value) = self { value } else { nil } }
+    var todoEditorValue: TodoEditorDraft? { if case .todoEditor(let value) = self { value } else { nil } }
     var textValue: TextDraft? { if case .text(let value) = self { value } else { nil } }
 }
 enum AffectedID: Hashable, Sendable {

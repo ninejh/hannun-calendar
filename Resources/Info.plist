@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
     <key>CFBundleIdentifier</key><string>io.github.ninejh.hannuncalendar</string>
-    <key>CFBundleName</key><string>HannunCalendar</string>
+    <key>CFBundleName</key><string>Hannun Calendar</string>
     <key>CFBundleDisplayName</key><string>Hannun Calendar</string>
     <key>CFBundleExecutable</key><string>HannunCalendar</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -10,7 +10,7 @@
     <key>CFBundleLocalizations</key><array><string>en</string><string>ko</string></array>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleVersion</key><string>3</string>
     <key>SUFeedURL</key><string>https://hannun-calendar.vercel.app/appcast.xml</string>
     <key>SUPublicEDKey</key><string>RpAUk8ZqvZYRwF/mxg0Uw2UZhrImaUxYIHahXA+qCV4=</string>
     <key>SUEnableInstallerLauncherService</key><true/>
@@ -22,7 +22,6 @@
     <key>SUEnableAutomaticChecks</key><true/>
     <key>SUAutomaticallyUpdate</key><false/>
     <key>SUAllowsAutomaticUpdates</key><false/>
-    <key>LSUIElement</key><true/>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSCalendarsFullAccessUsageDescription</key>

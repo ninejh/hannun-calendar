@@ -8,7 +8,7 @@ enum CalendarMetrics {
 }
 private struct CalendarRenderKey: Equatable {
     var month: DateOnly; var selected: DateOnly; var today: DateOnly; var mode: DisplayMode
-    var settings: BoardSettings; var environment: EnvironmentSnapshot; var records: [EventRecord]
+    var settings: BoardSettings; var environment: EnvironmentSnapshot; var records: [EventRecord]; var todos: [Todo]
     var projectColors: [String: String]; var links: [String: String]; var pins: Set<String>
     var weather: ExternalWeatherProjection; var authorization: CalendarAuthorization
     var loading: Bool; var refreshing: Bool; var error: AppFailure?
@@ -25,12 +25,18 @@ private struct CalendarRenderKey: Equatable {
     private(set) var cellRects: [DateOnly: CGRect] = [:]
     private var cellDays: [String: DateOnly] = [:], addDays: [String: DateOnly] = [:], moreDays: [String: DateOnly] = [:]
     private var eventIDs: [String: String] = [:], tints: [String: NativeCalendarTint] = [:]
+    private var todoItems: [String: Todo] = [:]
+    private var zeroOverflowDays: Set<DateOnly> = []
+    private var sourceColors: [String: String] = [:]
     private var eventTimes: [String: String] = [:]
     private var weatherIcons: [(CGRect, String)] = []
     private var dayNumbers: [String: (DateOnly, Bool, Bool)] = [:]
     private var gridRect = CGRect.zero
     private var gridRows = 5
-    private var pointerEvent: (id: String, origin: CGPoint)?
+    private var pointerEvent: (id: String, item: NativeRenderItem, origin: CGPoint)?
+    private var draggingEvent = false
+    private var consumeDragMouseUp = false
+    private var dragPreview: NativeCanvasPaintSurface?
     private var dropDay: DateOnly?
     private var hoveredDay: DateOnly?
     private var hoveredItemID: String?
@@ -88,6 +94,17 @@ private struct CalendarRenderKey: Equatable {
         setAccessibilityIdentifier("board.calendar"); setAccessibilityLabel(context.text("a11y.calendar"))
         onAction = { [weak self] id in self?.perform(id) }
         onShortcut = { [weak self] event in self?.shortcut(event) ?? false }
+        for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification, NSApplication.didResignActiveNotification] {
+            let observation = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let source = (notification.object as? NSWindow).map(ObjectIdentifier.init)
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let source, self.window.map(ObjectIdentifier.init) != source { return }
+                    self.cancelEventDrag()
+                }
+            }
+            lifetime.onDispose { NotificationCenter.default.removeObserver(observation) }
+        }
         lifetime.own(context.presentation.subscribe { [weak self] change in self?.receive(change) })
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
@@ -105,7 +122,8 @@ private struct CalendarRenderKey: Equatable {
             $0.item.start == $1.item.start ? $0.id < $1.id : $0.item.start < $1.item.start
         }
         let colors = Dictionary(uniqueKeysWithValues: board.projects.map { ($0.id.uuidString.lowercased(), $0.colorHex) })
-        let next = CalendarRenderKey(month: state.view.month, selected: state.view.selectedDay, today: snapshot.clock.today, mode: state.view.mode, settings: board.settings, environment: snapshot.environment, records: visible, projectColors: colors, links: board.eventProjectLinks, pins: board.pinnedEventKeys, weather: snapshot.external.weather, authorization: snapshot.calendarAuthorization, loading: state.activity.loading, refreshing: state.activity.refreshing, error: state.lastError, size: bounds.size, viewportWidth: boardViewportWidth ?? bounds.width)
+        let datedTodos = board.todos.filter { $0.dueDate != nil && ($0.recurrence == nil || !$0.completed) }
+        let next = CalendarRenderKey(month: state.view.month, selected: state.view.selectedDay, today: snapshot.clock.today, mode: state.view.mode, settings: board.settings, environment: snapshot.environment, records: visible, todos: datedTodos, projectColors: colors, links: board.eventProjectLinks, pins: board.pinnedEventKeys, weather: snapshot.external.weather, authorization: snapshot.calendarAuthorization, loading: state.activity.loading, refreshing: state.activity.refreshing, error: state.lastError, size: bounds.size, viewportWidth: boardViewportWidth ?? bounds.width)
         guard next != renderKey else { return }
         let oldVisibleDays = Set(cellRects.keys)
         var comparablePrevious = renderKey
@@ -116,7 +134,7 @@ private struct CalendarRenderKey: Equatable {
         reduceMotion = next.environment.reduceMotion
         if previousTheme != next.environment.resolvedAppearance { theme = NativeTheme(appearance: next.environment.resolvedAppearance) }
         setAccessibilityLabel(context.text("a11y.calendar"))
-        cellRects = [:]; cellDays = [:]; addDays = [:]; moreDays = [:]; eventIDs = [:]; tints = [:]; eventTimes = [:]; weatherIcons = []; dayNumbers = [:]
+        cellRects = [:]; cellDays = [:]; addDays = [:]; moreDays = [:]; eventIDs = [:]; todoItems = [:]; zeroOverflowDays = []; tints = [:]; sourceColors = [:]; eventTimes = [:]; weatherIcons = []; dayNumbers = [:]
         var output: [NativeRenderItem] = []
         let toolbarBottom = toolbar(into: &output, key: next)
         // The footer belongs to the setting, so data arrival/offline changes never resize the grid.
@@ -158,6 +176,8 @@ private struct CalendarRenderKey: Equatable {
         let chipHeight = board.settings.compact ? CalendarMetrics.compactChip : CalendarMetrics.comfortableChip
         let pitch = chipHeight + CalendarMetrics.chipGap
         var byDay: [DateOnly: [EventRecord]] = [:], eventRanges: [String: ClosedRange<DateOnly>] = [:]
+        var todosByDay: [DateOnly: [Todo]] = [:]
+        for todo in datedTodos { if let due = todo.dueDate { todosByDay[due, default: []].append(todo) } }
         for event in visible {
             if let range = NativeCalendarLayout.eventDays(event, timeZone: zone) {
                 eventRanges[event.id] = range
@@ -169,13 +189,23 @@ private struct CalendarRenderKey: Equatable {
             let rect = rects[index]; cellRects[day] = rect
             let dateLabel = DayMath.text(day.date(in: zone), format: "EEEE, MMMM d, yyyy", timeZone: zone, locale: locale)
             let count = eventRanges.values.filter { $0.contains(day) }.count
+            let todoCount = todosByDay[day]?.count ?? 0
             let id = "calendar.day.\(day)"
             // The date's number target and AX enclosure coincide; the remaining cell selects through mouse handling.
-            let number = CGRect(x: rect.minX + CalendarMetrics.cellInset, y: rect.minY + NativeSpace.xs, width: numberSize, height: numberSize)
-            output.append(NativeRenderItem(id: id, rect: number, label: context.text("a11y.day", values: ["date": dateLabel, "count": String(count)]), kind: .row, value: day.description))
+            let numberX = min(rect.maxX, rect.minX + CalendarMetrics.cellInset)
+            let top = min(rect.maxY, rect.minY + NativeSpace.xs)
+            let addWidth = min(NativeSize.compactTarget, max(0, rect.width - CalendarMetrics.cellInset - NativeSpace.xs))
+            let addX = max(numberX, rect.maxX - NativeSpace.xs - addWidth)
+            let number = CGRect(x: numberX, y: top, width: min(numberSize, max(0, addX - numberX)), height: min(numberSize, max(0, rect.maxY - top)))
+            var accessible = context.text("a11y.day", values: ["date": dateLabel, "count": String(count)])
+            if todoCount > 0 { accessible += " · " + context.text("todo.title") + " \(todoCount)" }
+            let available = rect.maxY - (rect.minY + NativeSpace.xs + numberSize + NativeSpace.xs) - NativeSpace.xs
+            if available < pitch, count + todoCount > 0 { zeroOverflowDays.insert(day); accessible += " · " + context.text("toolbar.more_events", values: ["0": String(count + todoCount)]) }
+            output.append(NativeRenderItem(id: id, rect: number, label: accessible, kind: .row, value: day.description, interactionRect: number, minimumTarget: 0))
             cellDays[id] = day; dayNumbers[id] = (day, day == next.today, day.month == next.month.month && day.year == next.month.year)
             let addID = "action.add.\(day)"
-            output.append(NativeRenderItem(id: addID, rect: CGRect(x: rect.maxX - NativeSize.compactTarget - NativeSpace.xs, y: number.minY, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: context.text("a11y.new_on_date", values: ["date": dateLabel]), kind: .button, color: .textQuiet))
+            let addRect = CGRect(x: addX, y: top, width: addWidth, height: min(NativeSize.compactTarget, max(0, rect.maxY - top)))
+            output.append(NativeRenderItem(id: addID, rect: addRect, label: context.text("a11y.new_on_date", values: ["date": dateLabel]), kind: .button, color: .textQuiet, interactionRect: addRect, minimumTarget: 0))
             addDays[addID] = day
             if weatherEnabled, let weather = snapshot.external.weather.days.first(where: { $0.date == day }), let key = Self.weatherKey(weather.code) {
                 let size = board.settings.compact ? CalendarMetrics.weatherCompact : CalendarMetrics.weatherComfortable
@@ -195,7 +225,8 @@ private struct CalendarRenderKey: Equatable {
             let eventTop = rowRect.minY + NativeSpace.xs + numberSize + NativeSpace.xs
             let capacity = max(0, Int((rowRect.maxY - eventTop - NativeSpace.xs) / pitch))
             let daily = (0..<7).map { column in days[firstIndex + column].flatMap { byDay[$0] } ?? [] }
-            let packed = NativeCalendarLayout.pack(week, dailyCounts: daily.map(\.count), capacity: capacity)
+            let tasks = (0..<7).map { column in days[firstIndex + column].flatMap { todosByDay[$0] } ?? [] }
+            let packed = NativeCalendarLayout.pack(week, dailyCounts: (0..<7).map { daily[$0].count + tasks[$0].count }, capacity: capacity)
             for segment in packed.segments {
                 guard let event = eventLookup[segment.eventID] else { continue }
                 let first = rects[firstIndex + segment.startColumn], last = rects[firstIndex + segment.endColumn]
@@ -207,13 +238,19 @@ private struct CalendarRenderKey: Equatable {
                 let index = firstIndex + column; guard let day = days[index] else { continue }
                 let rect = rects[index], packedDay = packed.days[column]
                 for (i, lane) in packedDay.eventLanes.enumerated() {
-                    let event = daily[column][i]
-                    appendEvent(event, id: "calendar.event.\(event.id)", rect: CGRect(x: rect.minX + CalendarMetrics.cellInset, y: eventTop + CGFloat(lane) * pitch, width: max(0, rect.width - CalendarMetrics.cellInset * 2), height: chipHeight), continuation: (false, false), key: next, zone: zone, output: &output)
+                    let itemRect = CGRect(x: rect.minX + CalendarMetrics.cellInset, y: eventTop + CGFloat(lane) * pitch, width: max(0, rect.width - CalendarMetrics.cellInset * 2), height: chipHeight)
+                    if i < daily[column].count {
+                        let event = daily[column][i]
+                        appendEvent(event, id: "calendar.event.\(event.id)", rect: itemRect, continuation: (false, false), key: next, zone: zone, output: &output)
+                    } else {
+                        appendTodo(tasks[column][i - daily[column].count], rect: itemRect, output: &output)
+                    }
                 }
-                if packedDay.hiddenCount > 0 {
+                if packedDay.hiddenCount > 0, let moreLane = packedDay.moreLane {
                     let id = "calendar.more.\(day)"
-                    let y = packedDay.moreLane.map { eventTop + CGFloat($0) * pitch } ?? (rect.maxY - NativeSize.compactTarget)
-                    output.append(NativeRenderItem(id: id, rect: CGRect(x: rect.minX + CalendarMetrics.cellInset, y: y, width: max(0, rect.width - CalendarMetrics.cellInset * 2), height: max(chipHeight, NativeSize.compactTarget)), label: context.text("toolbar.more_events", values: ["0": String(packedDay.hiddenCount)]), kind: .button, value: String(packedDay.hiddenCount), color: .textQuiet))
+                    let y = eventTop + CGFloat(moreLane) * pitch
+                    let moreRect = CGRect(x: rect.minX + CalendarMetrics.cellInset, y: y, width: max(0, rect.width - CalendarMetrics.cellInset * 2), height: chipHeight)
+                    output.append(NativeRenderItem(id: id, rect: moreRect, label: context.text("toolbar.more_events", values: ["0": String(packedDay.hiddenCount)]), kind: .button, value: String(packedDay.hiddenCount), color: .textQuiet, interactionRect: moreRect, minimumTarget: chipHeight))
                     moreDays[id] = day
                 }
             }
@@ -297,6 +334,18 @@ private struct CalendarRenderKey: Equatable {
         if key.viewportWidth > BoardLayoutMetrics.compactBreakpoint, !event.allDay, !continuation.0 { eventTimes[id] = time }
         let color = key.links[record.pinKey].flatMap { key.projectColors[$0.lowercased()] } ?? event.colorHex
         tints[id] = Self.tint(color)
+        sourceColors[id] = color
+    }
+    private func appendTodo(_ todo: Todo, rect: CGRect, output: inout [NativeRenderItem]) {
+        let base = "calendar.todo." + todo.id.uuidString.lowercased()
+        let checkWidth = min(NativeSize.compactTarget, rect.width / 3)
+        let checkRect = CGRect(x: rect.minX, y: rect.minY, width: checkWidth, height: rect.height)
+        let titleRect = CGRect(x: checkRect.maxX, y: rect.minY, width: max(0, rect.width - checkWidth), height: rect.height)
+        let description = context.text("todo.item_label", values: ["0": todo.title]) + " · " + (todo.dueDate?.description ?? "")
+        let checkLabel = context.text(todo.completed ? "todo.mark_open" : "todo.mark_done") + " · " + description
+        output.append(NativeRenderItem(id: base + ".check", rect: checkRect, label: checkLabel, kind: .checkBox, checked: todo.completed, interactionRect: checkRect, minimumTarget: 0))
+        output.append(NativeRenderItem(id: base + ".open", rect: titleRect, label: description, kind: .button, value: todo.title, fill: .raised, interactionRect: titleRect, minimumTarget: 0))
+        todoItems[base + ".check"] = todo; todoItems[base + ".open"] = todo
     }
     func anchorRect(for id: String) -> CGRect? {
         if let day = DateOnly(id) { return cellRects[day] }
@@ -309,10 +358,22 @@ private struct CalendarRenderKey: Equatable {
         return StableAnchor(target: target, boardRect: convert(rect, to: root), returnFocusID: FocusID(id))
     }
     private func perform(_ id: String) {
-        if let day = cellDays[id] { context.presentation.send(.selectDay(day)); return }
+        if let day = cellDays[id] {
+            context.presentation.send(.selectDay(day))
+            if zeroOverflowDays.contains(day) { context.routing.route(.revealAgenda(day: day, anchor: anchor(id, target: .day(day)))) }
+            return
+        }
         if let day = moreDays[id] { context.routing.route(.revealAgenda(day: day, anchor: anchor(id, target: .day(day)))); return }
         if let day = addDays[id] { context.routing.route(.openAdd(AddRequest(kind: .event, day: day, anchor: anchor(id, target: .day(day))))); return }
         if let event = eventIDs[id] { context.routing.route(.openEvent(eventID: event, anchor: anchor(id, target: .event(event)))); return }
+        if let todo = todoItems[id] {
+            if id.hasSuffix(".check") {
+                if let intent = TodoActions.completion(todo) { context.presentation.send(.edit(.panel(intent), undoable: true)) }
+            } else {
+                context.routing.route(.openAdd(AddRequest(kind: .todo, day: todo.dueDate, todoID: todo.id, anchor: anchor(id, target: .control(id)))))
+            }
+            return
+        }
         switch id {
         case "action.previousPeriod": context.presentation.send(.movePeriod(-1))
         case "action.nextPeriod": context.presentation.send(.movePeriod(1))
@@ -343,6 +404,7 @@ private struct CalendarRenderKey: Equatable {
         }
     }
     private func shortcut(_ event: NSEvent) -> Bool {
+        if event.keyCode == 53, draggingEvent { cancelEventDrag(); return true }
         if let focused = focus.focusedID?.rawValue, let day = cellDays[focused], !event.modifierFlags.contains(.command), let delta = [123: -1, 124: 1, 125: 7, 126: -7][Int(event.keyCode)], let next = day.addingDays(delta) {
             context.presentation.send(.selectDay(next)); focus.focus(FocusID("calendar.day.\(next)")); return true
         }
@@ -350,7 +412,8 @@ private struct CalendarRenderKey: Equatable {
     }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let item = item(at: point), let id = eventIDs[item.id], let record = context.presentation.state.snapshot.calendar.records.first(where: { $0.id == id }), record.item.writable, !id.hasPrefix("pending:") { pointerEvent = (id, point) }
+        consumeDragMouseUp = false
+        if let item = item(at: point), let id = eventIDs[item.id], let record = context.presentation.state.snapshot.calendar.records.first(where: { $0.id == id }), record.item.writable, !record.item.itemIdentifier.hasPrefix("pending:") { pointerEvent = (id, item, point) }
         else if item(at: point) == nil, let day = cellRects.first(where: { $0.value.contains(point) })?.key {
             context.presentation.send(.selectDay(day))
             if event.clickCount == 2 { context.routing.route(.openAdd(AddRequest(kind: .event, day: day, anchor: anchor("calendar.day.\(day)", target: .day(day))))) }
@@ -373,21 +436,62 @@ private struct CalendarRenderKey: Equatable {
     override func mouseDragged(with event: NSEvent) {
         guard let pointerEvent else { super.mouseDragged(with: event); return }
         let point = convert(event.locationInWindow, from: nil)
-        guard hypot(point.x - pointerEvent.origin.x, point.y - pointerEvent.origin.y) >= NativeSpace.xs else { return }
-        let old = dropDay; dropDay = cellRects.first(where: { $0.value.contains(point) })?.key
+        guard draggingEvent || hypot(point.x - pointerEvent.origin.x, point.y - pointerEvent.origin.y) >= NativeSpace.xs else { return }
+        draggingEvent = true
+        let old = dropDay
+        let candidate = cellRects.first(where: { $0.value.contains(point) })?.key
+        let record = context.presentation.state.snapshot.calendar.records.first { $0.id == pointerEvent.id }
+        let zone = TimeZone(identifier: context.presentation.state.snapshot.clock.timeZone)
+        let originalDay = record.flatMap { record in zone.flatMap { DateOnly(date: record.item.start, timeZone: $0) } }
+        dropDay = candidate != originalDay && record?.item.writable == true && zone != nil ? candidate : nil
         if old != dropDay { if let old, let rect = cellRects[old] { setNeedsDisplay(rect) }; if let day = dropDay, let rect = cellRects[day] { setNeedsDisplay(rect) } }
+        let preview: NativeCanvasPaintSurface
+        if let existing = dragPreview { preview = existing }
+        else {
+            preview = NativeCanvasPaintSurface(frame: pointerEvent.item.rect)
+            preview.identifier = NSUserInterfaceItemIdentifier("calendar.drag.preview")
+            preview.alphaValue = 0.86
+            let item = pointerEvent.item
+            preview.painter = { [weak self, weak preview] _ in
+                guard let self, let preview else { return }
+                var ghost = item; ghost.rect = preview.bounds
+                self.paint(ghost)
+                (self.dropDay == nil ? self.theme.color(.danger) : self.theme.color(.accentBlue)).setStroke()
+                let outline = NSBezierPath(roundedRect: preview.bounds.insetBy(dx: 1, dy: 1), xRadius: NativeRadius.chip, yRadius: NativeRadius.chip)
+                outline.lineWidth = NativeSize.focusWidth; outline.stroke()
+            }
+            dragPreview = preview; addSubview(preview, positioned: .above, relativeTo: nil)
+        }
+        preview.frame.origin = CGPoint(x: pointerEvent.item.rect.minX + point.x - pointerEvent.origin.x, y: pointerEvent.item.rect.minY + point.y - pointerEvent.origin.y)
+        if old != dropDay { preview.needsDisplay = true }
     }
     override func mouseUp(with event: NSEvent) {
-        if let dragged = pointerEvent, let target = dropDay {
-            pointerEvent = nil; dropDay = nil
+        if consumeDragMouseUp { consumeDragMouseUp = false; return }
+        if draggingEvent, let dragged = pointerEvent {
+            let point = convert(event.locationInWindow, from: nil)
+            let target = cellRects.first(where: { $0.value.contains(point) })?.key
+            finishEventDrag()
             if let record = context.presentation.state.snapshot.calendar.records.first(where: { $0.id == dragged.id }), record.item.writable,
-               let zone = TimeZone(identifier: context.presentation.state.snapshot.clock.timeZone), let draft = NativeCalendarLayout.shift(record, to: target, timeZone: zone) {
+               let target, let zone = TimeZone(identifier: context.presentation.state.snapshot.clock.timeZone),
+               DateOnly(date: record.item.start, timeZone: zone) != target, let draft = NativeCalendarLayout.shift(record, to: target, timeZone: zone) {
                 context.presentation.send(.command(.saveEvent(.calendarEdit(EventIdentity(id: record.id), expectedVersion: record.version, draft, MetadataPatch())), feedback: PresentationFeedback(messageKey: "toast.event_moving", values: ["date": DayMath.text(target.date(in: zone), format: "MMM d", timeZone: zone)])))
                 context.presentation.send(.selectDay(target))
             }
             needsDisplay = true; return
         }
         pointerEvent = nil; super.mouseUp(with: event)
+    }
+    private func finishEventDrag() {
+        pointerEvent = nil; draggingEvent = false; dropDay = nil
+        dragPreview?.removeFromSuperview(); dragPreview = nil
+        // Clear the base canvas press without activating the original chip.
+        let outside = convert(CGPoint(x: bounds.minX - 10000, y: bounds.minY - 10000), to: nil)
+        if let event = NSEvent.mouseEvent(with: .leftMouseUp, location: outside, modifierFlags: [], timestamp: 0, windowNumber: window?.windowNumber ?? 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { super.mouseUp(with: event) }
+        refreshFeedback()
+    }
+    private func cancelEventDrag() {
+        guard draggingEvent else { pointerEvent = nil; return }
+        finishEventDrag(); consumeDragMouseUp = true
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -398,6 +502,22 @@ private struct CalendarRenderKey: Equatable {
         for (rect, key) in weatherIcons where rect.intersects(dirtyRect) { CalendarWeatherPainter.draw(key, in: rect, color: theme.color(.textQuiet), appearance: theme.appearance) }
     }
     override func paint(_ item: NativeRenderItem) {
+        if item.id.hasPrefix("calendar.todo.") {
+            if item.id.hasSuffix(".check") {
+                let size = max(0, min(NativeSpace.lg, item.rect.width - NativeSpace.xxs * 2, item.rect.height - NativeSpace.xxs * 2))
+                let box = CGRect(x: item.rect.midX - size / 2, y: item.rect.midY - size / 2, width: size, height: size)
+                let path = NSBezierPath(roundedRect: box, xRadius: NativeRadius.chip, yRadius: NativeRadius.chip)
+                if item.checked { theme.color(.fill).setFill(); path.fill() } else { theme.color(.checkboxBorder).setStroke(); path.lineWidth = 1; path.stroke() }
+                if item.checked {
+                    theme.color(.toastText).setStroke(); let check = NSBezierPath(); check.lineWidth = 1.5
+                    check.move(to: CGPoint(x: box.minX + size * 0.2, y: box.midY)); check.line(to: CGPoint(x: box.minX + size * 0.43, y: box.minY + size * 0.72)); check.line(to: CGPoint(x: box.minX + size * 0.8, y: box.minY + size * 0.25)); check.stroke()
+                }
+                paintFocus(item); return
+            }
+            var visual = item
+            visual.label = item.value ?? ""
+            super.paint(visual); return
+        }
         if item.id == "calendar.permission" {
             let attributes = NativeFont.attributes(font: NativeFont.primary, color: theme.color(.textSecondary), truncation: .byWordWrapping)
             (item.label as NSString).draw(in: item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xs), withAttributes: attributes)
@@ -420,23 +540,31 @@ private struct CalendarRenderKey: Equatable {
             let font = renderKey?.settings.compact == true ? NativeFont.dayCompact : NativeFont.day
             let size = (text as NSString).size(withAttributes: [.font: font])
             (text as NSString).draw(at: CGPoint(x: item.rect.midX - size.width / 2, y: item.rect.midY - size.height / 2), withAttributes: NativeFont.attributes(font: font, color: color))
+            if zeroOverflowDays.contains(day), item.rect.width >= NativeSpace.sm, item.rect.height >= NativeSpace.sm {
+                (today ? theme.color(.toastText) : theme.color(.accentBlue)).setFill()
+                NSBezierPath(ovalIn: CGRect(x: item.rect.maxX - NativeSpace.xs, y: item.rect.maxY - NativeSpace.xs, width: NativeSpace.xs, height: NativeSpace.xs)).fill()
+            }
             paintFocus(item); return
         }
         if item.id.hasPrefix("calendar.weather.") { return }
         if let tint = tints[item.id] {
-            let category = theme.tint(tint), base = theme.tint(tint, background: true)
+            let category = Self.eventColor(sourceColors[item.id] ?? "", fallback: theme.tint(tint), appearance: theme.appearance), base = theme.tint(tint, background: true)
             let fill = base.blended(withFraction: theme.appearance == .dark ? 0.28 : 0.24, of: category) ?? base
             (paintingFeedback && hoveredItemID == item.id ? theme.color(.hover) : fill).setFill()
             NSBezierPath(roundedRect: item.rect, xRadius: NativeRadius.chip, yRadius: NativeRadius.chip).fill()
             category.setFill()
             NSBezierPath(rect: CGRect(x: item.rect.minX + 1, y: item.rect.minY + NativeSpace.xxs, width: 5, height: max(0, item.rect.height - 2 * NativeSpace.xxs))).fill()
-            var text = item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xxs)
+            let text = item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xxs)
             if let time = eventTimes[item.id] {
-                let width = (time as NSString).size(withAttributes: [.font: NativeFont.eventTime]).width
-                drawText(time, in: CGRect(x: text.minX, y: text.minY, width: min(width, text.width), height: text.height), font: NativeFont.eventTime, color: theme.color(.textPrimary))
-                text.origin.x += width + NativeSpace.xs; text.size.width = max(0, item.rect.maxX - NativeSpace.xs - text.minX)
-            }
-            drawText(item.value ?? item.label, in: text, font: NativeFont.eventChip, color: theme.color(.textPrimary)); paintFocus(item); return
+                let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
+                let line = NSMutableAttributedString(string: time + "  ", attributes: [.font: NativeFont.eventTime, .foregroundColor: theme.color(.textPrimary), .paragraphStyle: paragraph])
+                line.append(NSAttributedString(string: item.value ?? item.label, attributes: [.font: NativeFont.eventChip, .foregroundColor: theme.color(.textPrimary), .paragraphStyle: paragraph]))
+                NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: text).addClip()
+                let height = ceil(line.size().height)
+                line.draw(in: CGRect(x: text.minX, y: text.midY - height / 2, width: max(0, text.width), height: height))
+                NSGraphicsContext.restoreGraphicsState()
+            } else { drawText(item.value ?? item.label, in: text, font: NativeFont.eventChip, color: theme.color(.textPrimary)) }
+            paintFocus(item); return
         }
         if let day = addDays[item.id] {
             if paintingFeedback && (hoveredDay == day || focus.focusedID == FocusID(item.id) || focus.focusedID == FocusID("calendar.day.\(day)")) { drawText("+", in: item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xs), font: NativeFont.body, color: theme.color(.textQuiet)) }
@@ -551,6 +679,27 @@ private struct CalendarRenderKey: Equatable {
     static func weatherKey(_ code: Int) -> String? {
         switch code { case 0: "weather.clear"; case 1...2: "weather.partly_cloudy"; case 3: "weather.overcast"; case 45, 48: "weather.fog"; case 51...57: "weather.drizzle"; case 61...67, 80...82: "weather.rain"; case 71...77, 85...86: "weather.snow"; case 95...99: "weather.thunderstorm"; default: nil }
     }
+    private static func eventColor(_ hex: String, fallback: NSColor, appearance: ResolvedAppearance) -> NSColor {
+        let normalized = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")).lowercased()
+        guard normalized.count == 6, UInt64(normalized, radix: 16) != nil,
+              let color = NSColor(nativeHex: normalized).usingColorSpace(.deviceRGB) else { return fallback }
+        let brightness = appearance == .dark ? max(0.72, color.brightnessComponent) : min(0.48, color.brightnessComponent)
+        var result = NSColor(calibratedHue: color.hueComponent, saturation: color.saturationComponent, brightness: brightness, alpha: 1)
+        let theme = NativeTheme(appearance: appearance)
+        func luminance(_ value: NSColor) -> CGFloat {
+            guard let rgb = value.usingColorSpace(.sRGB) else { return 0 }
+            func linear(_ channel: CGFloat) -> CGFloat { channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(rgb.redComponent) + 0.7152 * linear(rgb.greenComponent) + 0.0722 * linear(rgb.blueComponent)
+        }
+        func contrast(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            let x = luminance(a), y = luminance(b)
+            return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+        }
+        for _ in 0..<12 where contrast(result, theme.color(.panel)) < 3.4 || contrast(result, theme.color(.selected)) < 3.2 {
+            result = result.blended(withFraction: 0.12, of: appearance == .dark ? .white : .black) ?? result
+        }
+        return result
+    }
     private static func tint(_ hex: String) -> NativeCalendarTint {
         // Category identities survive appearance changes and color-space conversion.
         // These are accepted category inputs; their paint colors remain Kit tokens.
@@ -571,6 +720,7 @@ private struct CalendarRenderKey: Equatable {
         switch hue { case 0.05..<0.12: return .amber; case 0.12..<0.45: return .mint; case 0.45..<0.58: return .sky; case 0.58..<0.68: return .blue; case 0.68..<0.81: return .purple; case 0.81..<0.95: return .rose; default: return .red }
     }
     override func dispose() {
+        cancelEventDrag()
         staticRasterLayer?.mask = nil; staticMask.path = nil
         for surface in feedbackSurfaces { surface.painter = nil; surface.layer?.contents = nil; surface.removeFromSuperview() }
         lifetime.dispose(); NativeMotion.stop(spinner); spinner.removeFromSuperlayer(); rangeGeneration += 1; visibleRange = nil; renderKey = nil; boardShortcut = nil; cellRects = [:]; eventIDs = [:]; pointerEvent = nil; dropDay = nil

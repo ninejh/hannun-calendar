@@ -129,6 +129,10 @@ enum NativeOperation: Hashable, Sendable {
     mutating func event(_ draft: EventDraft) {
         text(draft.title); scalar(draft.start.timeIntervalSinceReferenceDate); scalar(draft.end.timeIntervalSinceReferenceDate)
         scalar(draft.allDay); text(draft.calendarID); text(draft.location); text(draft.notes)
+        optional(draft.recurrence) { writer, recurrence in
+            writer.text(recurrence.frequency.rawValue); writer.scalar(recurrence.interval); writer.text(recurrence.timeZoneIdentifier)
+            switch recurrence.end { case .never: writer.text("never"); case .onDate(let day): writer.text("onDate"); writer.text(day.description) }
+        }
     }
     mutating func metadata(_ patch: MetadataPatch) {
         field(patch.projectID) { $0.optional($1) { $0.scalar($1) } }
@@ -181,7 +185,16 @@ enum NativeOperation: Hashable, Sendable {
             optional(patch.currency) { $0.text($1) }; optional(patch.paymentMemo) { $0.text($1) }
         case .deleteSubscription(let id): text("subscriptionDelete"); scalar(id)
         case .createTodo(let id, let title): text("todoCreate"); scalar(id); text(title)
-        case .updateTodo(let id, let patch): text("todoUpdate"); scalar(id); optional(patch.title) { $0.text($1) }; optional(patch.completed) { $0.scalar($1) }
+        case .createTodoDetailed(let input):
+            text("todoCreateDetailed"); scalar(input.id); text(input.title)
+            optional(input.dueDate) { $0.scalar($1) }; optional(input.projectID) { $0.scalar($1) }; optional(input.recurrence) { $0.encoded($1) }
+        case .completeTodoOccurrence(let id, let scheduleID, let due): text("todoCompleteOccurrence"); scalar(id); scalar(scheduleID); scalar(due)
+        case .updateTodo(let id, let patch):
+            text("todoUpdate"); scalar(id); optional(patch.title) { $0.text($1) }; optional(patch.completed) { $0.scalar($1) }
+            optional(patch.expectedCompleted) { $0.scalar($1) }
+            field(patch.dueDate) { $0.optional($1) { $0.scalar($1) } }
+            field(patch.projectID) { $0.optional($1) { $0.scalar($1) } }
+            field(patch.recurrence) { $0.optional($1) { $0.encoded($1) } }
         case .deleteTodo(let id): text("todoDelete"); scalar(id)
         case .createHabit(let id, let title): text("habitCreate"); scalar(id); text(title)
         case .updateHabit(let id, let title): text("habitUpdate"); scalar(id); text(title)

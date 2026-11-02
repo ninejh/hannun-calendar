@@ -16,7 +16,7 @@ enum OverlaySearch {
             needle.isEmpty || values.contains { $0.precomposedStringWithCompatibilityMapping.lowercased().contains(needle) }
         }
         // Do not filter against hiddenCalendarIDs: search is the route into hidden source events.
-        var output = snapshot.calendar.records.compactMap { record -> OverlaySearchResult? in
+        let events = snapshot.calendar.records.compactMap { record -> OverlaySearchResult? in
             let day = DateOnly(date: record.item.start, timeZone: zone)
             let calendar = snapshot.calendar.calendars.first { $0.id == record.item.calendarID }
             let projectID = snapshot.board.eventProjectLinks[record.pinKey].flatMap(UUID.init(uuidString:))
@@ -24,11 +24,12 @@ enum OverlaySearch {
             guard matches([record.item.title, day?.description ?? "", record.item.location, record.item.notes, calendar?.title ?? "", calendar?.account ?? "", project?.title ?? ""]) else { return nil }
             return OverlaySearchResult(id: "event." + record.id, title: record.item.title, kindKey: "search.event", day: day, target: .event(record.id))
         }
-        output += snapshot.board.projects.compactMap { project in
+        let projects = snapshot.board.projects.compactMap { project -> OverlaySearchResult? in
             guard matches([project.title, project.targetDay?.description ?? ""]) else { return nil }
             return OverlaySearchResult(id: "project." + project.id.uuidString, title: project.title, kindKey: "search.project", day: project.targetDay, target: .project(project.id))
         }
-        return Array(output.prefix(max(0, limit)))
+        let perTypeLimit = max(0, limit)
+        return Array(events.prefix(perTypeLimit)) + Array(projects.prefix(perTypeLimit))
     }
 }
 
@@ -40,6 +41,7 @@ struct EventOverlayDraft {
     var pinned: Bool
     var metadataRetryID: String?
     var expectedVersion: String?
+    var repeatIntervalText: String?
     var isReadOnly: Bool { original?.item.writable == false }
     var key: DraftKey { .event(original?.id ?? "new") }
     init(record: EventRecord, snapshot: BoardSnapshot) {
@@ -82,11 +84,61 @@ struct EventOverlayDraft {
         if let original { return .success(.calendarEdit(EventIdentity(id: original.id), expectedVersion: expectedVersion ?? original.version, event, metadata)) }
         return .success(.calendarCreate(event, metadata))
     }
-    var savedDraft: EventEditorDraft { EventEditorDraft(event: event, metadata: MetadataPatch(projectID: .set(projectID), pinned: .set(pinned)), expectedVersion: expectedVersion) }
+    var savedDraft: EventEditorDraft { EventEditorDraft(event: event, metadata: MetadataPatch(projectID: .set(projectID), pinned: .set(pinned)), expectedVersion: expectedVersion, repeatIntervalText: repeatIntervalText) }
     mutating func restore(_ draft: EventEditorDraft) {
-        event = draft.event; expectedVersion = draft.expectedVersion
+        event = draft.event; expectedVersion = draft.expectedVersion; repeatIntervalText = draft.repeatIntervalText
         if case .set(let value) = draft.metadata.projectID { projectID = value }
         if case .set(let value) = draft.metadata.pinned { pinned = value }
+    }
+}
+
+extension TodoEditorDraft {
+    init(todo: Todo?, day: DateOnly?, projectID: UUID?) {
+        self.id = todo?.id ?? UUID(); original = todo
+        title = TextDraft(text: todo?.title ?? "")
+        dueText = todo == nil ? (day?.description ?? "") : (todo?.dueDate?.description ?? "")
+        hasDueDate = todo == nil ? day != nil : todo?.dueDate != nil
+        self.projectID = todo == nil ? projectID : todo?.projectID
+        frequency = todo?.recurrence?.frequency
+        intervalText = String(todo?.recurrence?.interval ?? 1)
+        newScheduleID = UUID()
+    }
+    func intent(snapshot: BoardSnapshot) -> Result<PanelIntent?, AppFailure> {
+        func failure(_ key: String, code: AppFailureCode = .validationFailed) -> Result<PanelIntent?, AppFailure> {
+            .failure(AppFailure(code: code, messageKey: key))
+        }
+        let text = title.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 500 else { return failure("error.empty_name") }
+        let rawDate = dueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let due = hasDueDate ? DateOnly(rawDate) : nil
+        guard !hasDueDate || due != nil else { return failure("todo.invalid_date") }
+        guard projectID == nil || snapshot.board.projects.contains(where: { $0.id == projectID }) else { return failure("todo.project_missing") }
+        if original?.recurrence != nil && due == nil { return failure("todo.repeat_clear_date") }
+        var rule: TodoRecurrence?
+        if let frequency {
+            guard let due else { return failure("todo.repeat_date_required") }
+            guard !intervalText.isEmpty, intervalText.allSatisfy(\.isNumber), let interval = Int(intervalText), (1...999).contains(interval) else { return failure("todo.repeat_interval_invalid") }
+            guard original?.completed != true else { return failure("todo.repeat_completed") }
+            if let previous = original?.recurrence, previous.frequency == frequency, previous.interval == interval, original?.dueDate == due {
+                rule = previous
+            } else { rule = TodoRecurrence(scheduleID: newScheduleID, frequency: frequency, interval: interval, anchor: due) }
+        }
+        guard let original else { return .success(.createTodoDetailed(TodoInput(id: id, title: text, dueDate: due, projectID: projectID, recurrence: rule))) }
+        guard let current = snapshot.board.todos.first(where: { $0.id == id }) else { return failure("todo.conflict", code: .boardConflict) }
+        if (text != original.title && current.title != original.title && current.title != text) ||
+            (due != original.dueDate && current.dueDate != original.dueDate && current.dueDate != due) ||
+            (projectID != original.projectID && current.projectID != original.projectID && current.projectID != projectID) ||
+            (rule != original.recurrence && current.recurrence != original.recurrence && current.recurrence != rule) {
+            return failure("todo.conflict", code: .boardConflict)
+        }
+        if frequency != nil && current.completed { return failure("todo.repeat_completed") }
+        var patch = TodoPatch()
+        if text != original.title { patch.title = text }
+        if due != original.dueDate { patch.dueDate = .set(due) }
+        if projectID != original.projectID { patch.projectID = .set(projectID) }
+        if rule != original.recurrence { patch.recurrence = .set(rule) }
+        guard patch.title != nil || due != original.dueDate || projectID != original.projectID || rule != original.recurrence else { return .success(nil) }
+        return .success(.updateTodo(id, patch))
     }
 }
 

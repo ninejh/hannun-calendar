@@ -39,13 +39,13 @@ enum AppFailureCode: String, Sendable, CaseIterable {
 
 enum ProjectField: String, Sendable { case title, focus, nextStep, status, targetDay, colorHex, progress }
 enum CountdownField: String, Sendable { case title, day, colorHex }
-enum EventField: String, Sendable { case title, start, end, allDay, calendarID, location, notes, projectID, pinned, version }
+enum EventField: String, Sendable { case title, start, end, allDay, calendarID, location, notes, projectID, pinned, version, recurrence, recurrenceEnd }
 enum SettingsField: String, Sendable {
     case desktopMode, fontScale, opacity, importantOnly, showCompletedProjects, appearance, compact
     case language, weekStart, networkEnabled, ratesEnabled, weather, todosCompletedCollapsed, focus
 }
 enum PanelField: String, Sendable {
-    case name, title, nextDate, cycle, amount, currency, paymentMemo, notify, completed, marks, cityID, projectID, mode
+    case name, title, nextDate, cycle, amount, currency, paymentMemo, notify, completed, marks, cityID, projectID, mode, dueDate, recurrence
 }
 enum FieldPath: Sendable, Equatable {
     case operation, range, configuration, notes

@@ -8,6 +8,7 @@ import AppKit
     let id: UUID
     let titleField: NativeTextField
     let datePicker: NativeDatePicker
+    let colorWell = NSColorWell(frame: .zero)
     let surface: PanelContainerView
     let popover = NSPopover()
     private let host = NSViewController()
@@ -24,12 +25,17 @@ import AppKit
     private let initialDay: DateOnly
     private let initialTargetEnabled: Bool
     private let initialStatus: ProjectStatus
+    private let initialColorHex: String
+    private(set) var selectedColorHex: String
+    var colorWasChanged: Bool { selectedColorHex != initialColorHex }
     private var statusMenu: NativeMenu?
     private var disposed = false
     var draftKey: DraftKey { kind == .project ? .project(id) : .countdown(id) }
-    init(context: BoardScreenContext, kind: Kind, id: UUID, title: String, day: DateOnly?, status: ProjectStatus = .active, creating: Bool,
+    init(context: BoardScreenContext, kind: Kind, id: UUID, title: String, day: DateOnly?, status: ProjectStatus = .active, colorHex: String? = nil, creating: Bool,
          commit: @escaping @MainActor (String, DateOnly?, ProjectStatus) -> OperationHandle?) {
         self.context = context; self.kind = kind; self.id = id; self.creating = creating; self.commit = commit
+        let initialColor = colorHex ?? ProjectPalette.next(among: context.presentation.state.snapshot.board.projects)
+        initialColorHex = initialColor; selectedColorHex = initialColor
         self.status = status; targetEnabled = day != nil || kind == .countdown
         initialTitle = title; initialStatus = status; initialTargetEnabled = day != nil || kind == .countdown
         initialDay = day ?? ManagementCopy.tomorrow(context.presentation.state.snapshot.clock.today)
@@ -44,6 +50,10 @@ import AppKit
         titleField.delegate = self; titleField.target = self; titleField.action = #selector(submitAction)
         datePicker.target = self; datePicker.action = #selector(dateChanged)
         surface.addSubview(titleField); surface.addSubview(datePicker)
+        if kind == .project {
+            colorWell.color = NSColor(nativeHex: initialColor); colorWell.target = self; colorWell.action = #selector(colorChanged)
+            colorWell.setAccessibilityIdentifier("management.color"); surface.addSubview(colorWell)
+        }
         surface.onAction = { [weak self] action in self?.act(action) }
         surface.onShortcut = { [weak self] event in
             guard event.keyCode == 53, let self else { return false }
@@ -79,6 +89,7 @@ import AppKit
         titleField.frame = CGRect(x: inset, y: line * 2, width: width - inset * 2, height: line)
         datePicker.frame = CGRect(x: inset, y: line * 4, width: width - inset * 2, height: line)
         titleField.isEnabled = !pending; datePicker.isEnabled = !pending
+        colorWell.isEnabled = !pending; colorWell.setAccessibilityLabel(context.text("projects.field_color"))
         datePicker.isHidden = !targetEnabled
         let headline = creating ? (kind == .project ? "projects.new_title" : "deadlines.new_title") : (kind == .project ? "projects.rename" : "deadlines.rename")
         let titleKey = kind == .project ? "projects.field_name" : "deadlines.field_title"
@@ -88,8 +99,13 @@ import AppKit
         if creating && kind == .project {
             items.append(NativeRenderItem(id: "management.status", rect: CGRect(x: inset, y: line * 5 + NativeSpace.xs, width: width - inset * 2, height: line), label: context.text(ManagementCopy.status(status)), kind: .button, enabled: !pending, fill: .projectStatusBg))
         }
+        if kind == .project {
+            let colorY = line * (creating ? 6 : 5) + NativeSpace.xs
+            colorWell.frame = CGRect(x: width - inset - line * 2, y: colorY, width: line * 2, height: line)
+            items.append(NativeRenderItem(id: "management.color.label", rect: CGRect(x: inset, y: colorY, width: width - inset * 2 - line * 2, height: line), label: context.text("projects.field_color"), kind: .text))
+        }
         if let key = validationKey ?? failure?.messageKey {
-            items.append(NativeRenderItem(id: "management.error", rect: CGRect(x: inset, y: line * 6 + NativeSpace.sm, width: width - inset * 2, height: line * 2), label: context.text(key), kind: .text, color: .danger))
+            items.append(NativeRenderItem(id: "management.error", rect: CGRect(x: inset, y: line * (kind == .project ? 7 : 6) + NativeSpace.sm, width: width - inset * 2, height: line * 2), label: context.text(key), kind: .text, color: .danger))
         }
         let buttonY = surface.bounds.height - line - inset
         items.append(NativeRenderItem(id: "management.cancel", rect: CGRect(x: inset, y: buttonY, width: line * 3, height: line), label: context.text("event.cancel"), kind: .button, enabled: !pending))
@@ -115,6 +131,11 @@ import AppKit
     }
     @objc private func submitAction() { submit() }
     @objc private func dateChanged() { validationKey = nil; render() }
+    @objc private func colorChanged() {
+        guard !pending, let color = colorWell.color.usingColorSpace(.sRGB) else { return }
+        selectedColorHex = String(format: "%02X%02X%02X", Int((color.redComponent * 255).rounded()), Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()))
+        render()
+    }
     func controlTextDidChange(_ obj: Notification) {
         validationKey = nil
         let editor = titleField.currentEditor() as? NSTextView
@@ -149,11 +170,11 @@ import AppKit
         }
     }
     var canDismiss: Bool {
-        !pending && failure == nil && context.presentation.state.drafts[draftKey] == nil &&
+        !pending && failure == nil && context.presentation.state.drafts[draftKey] == nil && !colorWell.isActive &&
         (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true &&
         (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true &&
         titleField.stringValue == initialTitle && datePicker.day == initialDay &&
-        targetEnabled == initialTargetEnabled && status == initialStatus
+        targetEnabled == initialTargetEnabled && status == initialStatus && selectedColorHex == initialColorHex
     }
     func popoverShouldClose(_ popover: NSPopover) -> Bool { canDismiss }
     func popoverDidClose(_ notification: Notification) { onClose?() }
@@ -170,7 +191,7 @@ import AppKit
     private func finishClose() { popover.close(); onClose?() }
     func dispose() {
         guard !disposed else { return }; disposed = true
-        popover.delegate = nil; popover.close(); onClose = nil; commit = nil; statusMenu?.dispose(); statusMenu = nil
-        titleField.delegate = nil; titleField.target = nil; datePicker.target = nil; surface.dispose()
+        colorWell.deactivate(); popover.delegate = nil; popover.close(); onClose = nil; commit = nil; statusMenu?.dispose(); statusMenu = nil
+        titleField.delegate = nil; titleField.target = nil; datePicker.target = nil; colorWell.target = nil; surface.dispose()
     }
 }

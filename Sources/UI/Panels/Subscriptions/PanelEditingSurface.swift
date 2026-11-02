@@ -414,7 +414,7 @@ import AppKit
             items.append(NativeRenderItem(id: formID + ".notice", rect: CGRect(x: NativeSpace.md, y: y, width: width, height: NativeSize.toolbarHeight * 2), label: context.text(key), kind: .text, color: .textQuiet))
         }
         let actionY = bounds.height - NativeSize.toolbarHeight - NativeSpace.md
-        items.append(NativeRenderItem(id: formID + ".save", rect: CGRect(x: NativeSpace.md, y: actionY, width: width / 2 - NativeSpace.xs, height: NativeSize.toolbarHeight), label: context.text("event.save"), kind: .button, fill: .fill))
+        items.append(NativeRenderItem(id: formID + ".save", rect: CGRect(x: NativeSpace.md, y: actionY, width: width / 2 - NativeSpace.xs, height: NativeSize.toolbarHeight), label: context.text("event.save"), kind: .button, fill: .fill, color: .toastText))
         items.append(NativeRenderItem(id: formID + ".close", rect: CGRect(x: bounds.midX, y: actionY, width: width / 2 - NativeSpace.xs, height: NativeSize.toolbarHeight), label: context.text("a11y.close"), kind: .button))
         update(items: items)
     }

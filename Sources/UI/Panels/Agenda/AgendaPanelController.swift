@@ -3,12 +3,14 @@ import AppKit
 struct AgendaProjection: Equatable {
     var day: DateOnly
     var rows: [EventRecord]
+    var todos: [Todo]
     var next: EventRecord?
     var todayRows: [EventRecord]
 
     init(state: PresentationState, day: DateOnly? = nil) {
         let snapshot = state.snapshot
-        self.day = day ?? state.view.selectedDay
+        let selectedDay = day ?? state.view.selectedDay
+        self.day = selectedDay
         let zone = TimeZone(identifier: snapshot.clock.timeZone) ?? TimeZone(secondsFromGMT: 0)!
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
         let visible = snapshot.calendar.records.filter { !snapshot.board.hiddenCalendarIDs.contains($0.item.calendarID) }
@@ -24,14 +26,15 @@ struct AgendaProjection: Equatable {
                     return a == b ? $0.id < $1.id : a < b
                 }
         }
-        rows = on(self.day)
+        rows = on(selectedDay)
+        todos = snapshot.board.todos.filter { $0.dueDate == selectedDay && ($0.recurrence == nil || !$0.completed) }
         todayRows = on(snapshot.clock.today)
         next = todayRows.first { !$0.item.allDay && $0.item.start >= snapshot.clock.now.date }
     }
 }
 
 /// Same rows and root routes for the stable Today panel and the independent fallback surface.
-/// readOnly disables local mutations; original-calendar edits always belong to the root event overlay.
+/// The fallback keeps event pinning disabled while allowing edits to local to-dos.
 @MainActor final class AgendaPanelController: PanelController {
     let panelID: PanelID = .today
     let surface: AgendaPanelView
@@ -139,9 +142,10 @@ struct AgendaProjection: Equatable {
         let backWidth = max(44, ceil((backLabel as NSString).size(withAttributes: [.font: NativeFont.primary]).width) + NativeSpace.sm * 2)
         let controlHeight: CGFloat = useSelectedHeader ? 44 : min(NativeSize.compactTarget, baseHeader)
         let addWidth: CGFloat = readOnly ? 0 : controlHeight
+        let todoAddWidth = controlHeight
         let headerTop = heightStep == .tiny ? 0 : NativeSpace.xs
         let titleX = max(inset, editLeading)
-        let titleWidth = max(0, (useSelectedHeader ? contentWidth : contentWidth - addWidth - NativeSpace.sm) - (titleX - inset))
+        let titleWidth = max(0, (useSelectedHeader ? contentWidth : contentWidth - addWidth - todoAddWidth - NativeSpace.sm) - (titleX - inset))
         let dateFormatter = DateFormatter(); dateFormatter.locale = dayFormatter.locale; dateFormatter.calendar = dayFormatter.calendar; dateFormatter.timeZone = zone
         dateFormatter.setLocalizedDateFormatFromTemplate(projection.day.year == state.snapshot.clock.today.year ? "EEEE MMMM d" : "y EEEE MMMM d")
         let heading = selected ? dateFormatter.string(from: projection.day.date(in: zone)) : context.text("today.title")
@@ -155,7 +159,8 @@ struct AgendaProjection: Equatable {
         let header = useSelectedHeader ? headerTop + titleHeight + controlHeight : baseHeader
         let titleRect = CGRect(x: titleX, y: headerTop, width: titleWidth, height: titleHeight)
         var items = [NativeRenderItem(id: prefix + "title", rect: titleRect, label: heading, kind: .text)]
-        let count = context.text(projection.rows.count == 1 ? "calendar.events.one" : "calendar.events.other", values: ["0": String(projection.rows.count)])
+        var count = context.text(projection.rows.count == 1 ? "calendar.events.one" : "calendar.events.other", values: ["0": String(projection.rows.count)])
+        if !projection.todos.isEmpty { count += " · " + context.text("todo.title") + " \(projection.todos.count)" }
         let meta = dayFormatter.string(from: projection.day.date(in: zone)) + " · " + count
         if !compact && !useSelectedHeader {
             items.append(NativeRenderItem(id: prefix + "date", rect: CGRect(x: header - NativeSpace.lg < 32 ? titleX : inset, y: header - NativeSpace.lg, width: header - NativeSpace.lg < 32 ? max(0, width - inset - titleX) : contentWidth, height: NativeSpace.lg), label: meta, kind: .text, color: .textSecondary))
@@ -165,17 +170,18 @@ struct AgendaProjection: Equatable {
             items.append(NativeRenderItem(id: "agenda-back-today", rect: CGRect(x: backX, y: headerTop + titleHeight, width: backWidth, height: controlHeight), label: backLabel, kind: .button, value: backLabel, color: .accentBlue, minimumTarget: 44))
             let countWidth = ceil((count as NSString).size(withAttributes: [.font: NativeFont.badge]).width)
             let countX = backX + backWidth + NativeSpace.sm
-            if countX + countWidth + NativeSpace.sm <= width - inset - addWidth {
+            if countX + countWidth + NativeSpace.sm <= width - inset - addWidth - todoAddWidth {
                 items.append(NativeRenderItem(id: prefix + "date", rect: CGRect(x: countX, y: headerTop + titleHeight + (controlHeight - NativeSpace.lg) / 2, width: countWidth, height: NativeSpace.lg), label: count, kind: .text, color: .textSecondary))
             }
         }
         if !readOnly {
             items.append(NativeRenderItem(id: "agenda-add", rect: CGRect(x: width - inset - addWidth, y: useSelectedHeader ? headerTop + titleHeight : headerTop, width: addWidth, height: controlHeight), label: context.text("toolbar.new_event"), kind: .button, minimumTarget: controlHeight))
         }
+        items.append(NativeRenderItem(id: prefix + "todo-add", rect: CGRect(x: width - inset - addWidth - todoAddWidth, y: useSelectedHeader ? headerTop + titleHeight : headerTop, width: todoAddWidth, height: controlHeight), label: context.text("todo.add_action"), kind: .button, minimumTarget: controlHeight))
         if let slot, !readOnly, !editExclusions.isEmpty {
             items[0] = NativePanelHeader.decorate(items[0], geometry: PanelHeaderGeometry(slot: slot, titleRect: titleRect,
                 headerRect: metrics.regions(in: surface.bounds, headerHeight: header).headerRect,
-                excludedRects: items.filter { $0.id == "agenda-add" || $0.id == "agenda-back-today" }.map(\.hitRect) + editExclusions, actionLabel: context.text("slot_menu.title")))
+                excludedRects: items.filter { $0.id == "agenda-add" || $0.id == "agenda-back-today" || $0.id == prefix + "todo-add" }.map(\.hitRect) + editExclusions, actionLabel: context.text("slot_menu.title")))
         }
         let hasAllDay = projection.todayRows.contains { $0.item.allDay } || projection.rows.contains { $0.item.allDay }
         let showNext = fixedDay == nil && !projection.todayRows.isEmpty && (projection.next != nil || !hasAllDay)
@@ -229,6 +235,17 @@ struct AgendaProjection: Equatable {
                 rowItems.append(NativeRenderItem(id: "agenda-pin-" + event.id, rect: CGRect(x: rect.maxX - NativeSize.compactTarget, y: rect.midY - pinHeight / 2, width: NativeSize.compactTarget, height: pinHeight), label: context.text(pinned ? "a11y.unpin" : "a11y.pin", values: ["title": event.item.title]), kind: .button, value: pinned ? "★" : "☆", checked: pinned, color: pinned ? .warning : .textQuiet, minimumTarget: pinHeight))
             }
         }
+        for todo in projection.todos {
+            let column = columns == 2 && counters[1] < counters[0] ? 1 : 0
+            let rect = CGRect(x: inset + CGFloat(column) * (columnWidth + NativeSpace.md), y: listOffset + CGFloat(counters[column]) * (rowHeight + rowGap), width: columnWidth, height: rowHeight)
+            counters[column] += 1
+            let id = todo.id.uuidString.lowercased(), checkWidth = min(NativeSize.compactTarget, rect.width)
+            let checkRect = CGRect(x: rect.minX, y: rect.minY, width: checkWidth, height: rowHeight)
+            let openRect = CGRect(x: checkRect.maxX, y: rect.minY, width: max(0, rect.width - checkWidth), height: rowHeight)
+            let label = context.text("todo.item_label", values: ["0": todo.title]) + " · " + projection.day.description
+            rowItems.append(NativeRenderItem(id: prefix + "todo-check-" + id, rect: checkRect, label: context.text(todo.completed ? "todo.mark_open" : "todo.mark_done") + " · " + label, kind: .checkBox, enabled: TodoActions.completion(todo) != nil, checked: todo.completed, interactionRect: checkRect, minimumTarget: 0))
+            rowItems.append(NativeRenderItem(id: prefix + "todo-open-" + id, rect: openRect, label: label, kind: .button, value: todo.title, interactionRect: openRect, minimumTarget: 0))
+        }
         let loading = state.activity.loading || state.activity.refreshing
         if rowItems.isEmpty {
             let error = state.lastError
@@ -257,10 +274,24 @@ struct AgendaProjection: Equatable {
     }
     private func act(_ id: String) {
         if id == "agenda-back-today" { context.presentation.send(.followToday); return }
+        if id == prefix + "todo-add" {
+            let rect = surface.items.first { $0.id == id }?.rect ?? .zero
+            let anchor = StableAnchor(target: .control(id), boardRect: boardRect(rect, from: surface), returnFocusID: FocusID(id))
+            context.routing.route(.openAdd(AddRequest(kind: .todo, day: projection.day, anchor: anchor))); return
+        }
         if id == "agenda-add", !readOnly {
             let rect = surface.items.first { $0.id == id }?.rect ?? .zero
             let anchor = StableAnchor(target: .control(id), boardRect: boardRect(rect, from: surface), returnFocusID: FocusID(id))
             context.routing.route(.openAdd(AddRequest(kind: .event, day: projection.day, anchor: anchor))); return
+        }
+        if let todo = projection.todos.first(where: { prefix + "todo-open-" + $0.id.uuidString.lowercased() == id || prefix + "todo-check-" + $0.id.uuidString.lowercased() == id }) {
+            if id == prefix + "todo-check-" + todo.id.uuidString.lowercased() {
+                if let intent = TodoActions.completion(todo) { context.presentation.send(.edit(.panel(intent), undoable: true)) }
+            } else if let item = list.items.first(where: { $0.id == id }) {
+                let anchor = StableAnchor(target: .control(id), boardRect: boardRect(item.rect, from: list), returnFocusID: FocusID(id))
+                context.routing.route(.openAdd(AddRequest(kind: .todo, day: todo.dueDate, todoID: todo.id, anchor: anchor)))
+            }
+            return
         }
         if let event = projection.rows.first(where: { prefix + "open-" + $0.id == id }), let item = list.items.first(where: { $0.id == id }) {
             let anchor = StableAnchor(target: .event(event.id), boardRect: boardRect(item.rect, from: list), returnFocusID: FocusID(id))
@@ -313,7 +344,7 @@ struct AgendaProjection: Equatable {
     override func layout() { super.layout(); onLayout?() }
     override func paint(_ item: NativeRenderItem) {
         if item.panelHeader != nil { var feedback = item; feedback.label = ""; super.paint(feedback) }
-        if item.id == "agenda-add" || item.id == "agenda-back-today" { var visual = item; visual.label = item.id == "agenda-add" ? "+" : (item.value ?? item.label); super.paint(visual); return }
+        if item.id == "agenda-add" || item.id == "agenda-back-today" || item.id.hasSuffix("todo-add") { var visual = item; visual.label = item.id == "agenda-add" ? "+" : item.id.hasSuffix("todo-add") ? "✓+" : (item.value ?? item.label); super.paint(visual); return }
         if item.kind == .button { super.paint(item); return }
         if item.id == "agenda-next" { paintAgendaSummary(item, theme: theme); return }
         if let fill = item.fill { theme.color(fill).setFill(); NSBezierPath(roundedRect: item.rect, xRadius: item.radius, yRadius: item.radius).fill() }
@@ -353,6 +384,8 @@ struct AgendaRowPaint {
             }
             var visual = item
             if item.id.hasPrefix("agenda-pin-") { visual.label = item.value ?? "☆" }
+            if item.id.contains("todo-check-") { visual.label = "" }
+            if item.id.contains("todo-open-") { visual.label = item.label }
             super.paint(visual); return
         }
         // Shared canvas paints press/hover/focus enclosure. Full label remains on the AX item.

@@ -8,8 +8,19 @@ import AppKit
     var dayNight: [String: Bool] = [:]
     var gaugeFraction: Double = 0
     var gaugeColor: NativeColorToken = .timerFocus
+    static func lockedNoticeHeight(_ text: String, width: CGFloat) -> CGFloat {
+        let attributes = NativeFont.attributes(font: NativeFont.primary, color: .labelColor, lineHeight: NativeFont.primary.pointSize * 1.2, truncation: .byWordWrapping)
+        return ceil((text as NSString).boundingRect(with: CGSize(width: max(1, width - NativeSpace.sm * 2), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height)
+    }
     override func paint(_ item: NativeRenderItem) {
         guard !excludedPaintIDs.contains(item.id) else { return }
+        if item.id == "focusTimer.locked" {
+            NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: item.rect).addClip()
+            let rect = item.rect.insetBy(dx: NativeSpace.sm, dy: 0)
+            let attributes = NativeFont.attributes(font: NativeFont.primary, color: theme.color(item.color), lineHeight: NativeFont.primary.pointSize * 1.2, truncation: .byWordWrapping)
+            (item.label as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+            NSGraphicsContext.restoreGraphicsState(); return
+        }
         if item.id == "focusTimer.gauge" {
             let center = item.rect.center
             let radius = max(0, min(item.rect.width, item.rect.height) / 2 - NativeSpace.xs)

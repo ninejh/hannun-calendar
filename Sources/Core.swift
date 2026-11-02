@@ -216,6 +216,28 @@ struct DateOnly: Hashable, Comparable, Codable, Sendable, CustomStringConvertibl
     }
 }
 
+extension DateOnly {
+    /// Ordinal arithmetic is independent of DST, local time and 86400-second durations.
+    func addingDays(_ count: Int) -> DateOnly? {
+        let sum = ordinal.addingReportingOverflow(count)
+        guard !sum.overflow, (1...3_652_059).contains(sum.partialValue) else { return nil }
+        let target = sum.partialValue
+        var lower = 1, upper = 9999
+        while lower < upper {
+            let middle = (lower + upper + 1) / 2
+            let first = DateOnly(String(format: "%04d-01-01", middle))!
+            if first.ordinal <= target { lower = middle } else { upper = middle - 1 }
+        }
+        for month in 1...12 {
+            for day in 1...31 {
+                if let value = DateOnly(String(format: "%04d-%02d-%02d", lower, month, day)), value.ordinal == target { return value }
+            }
+        }
+        return nil
+    }
+}
+
+
 private struct AnyBoardKey: CodingKey {
     let stringValue: String
     var intValue: Int? { nil }
@@ -928,7 +950,7 @@ struct BoardDecodeResult: Decodable, Sendable {
 }
 
 struct BoardState: Codable, Equatable, Sendable {
-    var version = 3
+    var version = 4
     var boardRevision = 0
     var notes = ""
     var milestones: [Milestone] = []
@@ -959,11 +981,11 @@ struct BoardState: Codable, Equatable, Sendable {
         try requireKnownFields(decoder, CodingKeys.allCases.map(\.rawValue))
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let sourceVersion = c.contains(.version) ? try c.decode(Int.self, forKey: .version) : 1
-        guard (1...3).contains(sourceVersion) else { throw BoardStorageError(.unsupportedVersion) }
-        if sourceVersion < 3 { migrationKind = .schema(sourceVersion) }
+        guard (1...4).contains(sourceVersion) else { throw BoardStorageError(.unsupportedVersion) }
+        if sourceVersion < 4 { migrationKind = .schema(sourceVersion) }
         self.init()
         boardRevision = sourceVersion == 1 || !c.contains(.boardRevision) ? 0 : try c.decode(Int.self, forKey: .boardRevision)
-        if sourceVersion < 3 {
+        if sourceVersion < 4 {
             guard boardRevision >= 0, boardRevision < Int.max else { throw BoardStorageError(.protectedData) }
             boardRevision += 1
         }
@@ -989,13 +1011,13 @@ struct BoardState: Codable, Equatable, Sendable {
             guard let id = UUID(uuidString: reference), projectIDs.contains(id) else { return reference }
             return id.uuidString.lowercased()
         }
-        if sourceVersion == 3, !c.contains(.layout) { throw BoardStorageError(.protectedData) }
+        if sourceVersion >= 3, !c.contains(.layout) { throw BoardStorageError(.protectedData) }
         if c.contains(.layout) {
             let decoded = try BoardLayout.decoded(from: c.superDecoder(forKey: .layout))
             guard sourceVersion < 3 || decoded.version >= 2 else { throw BoardStorageError(.protectedData) }
             layout = decoded.layout
             repairNeeded = decoded.repair
-            if sourceVersion == 3, decoded.version < 4 || decoded.repair {
+            if sourceVersion == 4, decoded.version < 4 || decoded.repair {
                 guard boardRevision >= 0, boardRevision < Int.max else { throw BoardStorageError(.protectedData) }
                 boardRevision += 1
                 if decoded.version < 4 { migrationKind = .layout(decoded.version) }
@@ -1006,9 +1028,14 @@ struct BoardState: Codable, Equatable, Sendable {
             var legacy = BoardLayout(); legacy.version = 3
             layout = try GridResolver.migrate(legacy, viewport: viewport)
         }
-        if sourceVersion == 3 {
+        if sourceVersion >= 3 {
             subscriptions = c.contains(.subscriptions) ? try c.decode([Subscription].self, forKey: .subscriptions) : []
-            todos = c.contains(.todos) ? try c.decode([Todo].self, forKey: .todos) : []
+            if c.contains(.todos) {
+                if sourceVersion == 3 {
+                    var values = try c.nestedUnkeyedContainer(forKey: .todos)
+                    while !values.isAtEnd { todos.append(try Todo(legacy: values.superDecoder())) }
+                } else { todos = try c.decode([Todo].self, forKey: .todos) }
+            }
             habits = c.contains(.habits) ? try c.decode([Habit].self, forKey: .habits) : []
             worldClockCities = c.contains(.worldClockCities) ? try c.decode([WorldClockCity].self, forKey: .worldClockCities) : []
             focusTimer = c.contains(.focusTimer) ? try c.decode(FocusTimerState.self, forKey: .focusTimer) : FocusTimerState()
@@ -1019,7 +1046,7 @@ struct BoardState: Codable, Equatable, Sendable {
         try validate()
     }
     func validate() throws {
-        guard version == 3, boardRevision >= 0,
+        guard version == 4, boardRevision >= 0,
               Set(projects.map(\.id)).count == projects.count,
               Set(milestones.map(\.id)).count == milestones.count,
               projects.allSatisfy({ (0...100).contains($0.progress) && $0.colorHex.utf8.count == 6 && validColor($0.colorHex, fallback: "") == $0.colorHex.uppercased() }),
@@ -1151,7 +1178,6 @@ struct LocalStateFile: BoardPersistence {
         let decoded = try decodeResult(original)
         let state = decoded.state
         if decoded.requiresWrite {
-            if decoded.migrationKind != .none, layoutViewport == nil { throw BoardStorageError(.protectedData) }
             do {
                 try withDirectory { directory in
                     let source = try fingerprint()
@@ -1172,7 +1198,6 @@ struct LocalStateFile: BoardPersistence {
         try state.validate()
         let original = try checkPath() ? readFile(url) : nil
         let decoded = try original.map { try decodeResult($0) }
-        if let decoded, decoded.requiresWrite, layoutViewport == nil { throw BoardStorageError(.protectedData) }
         let data = try encode(state)
         try withDirectory { directory in
             let source = original == nil ? nil : try fingerprint()
@@ -1277,8 +1302,8 @@ struct LocalStateFile: BoardPersistence {
     private func backupPrefix(_ decoded: BoardDecodeResult) -> String {
         switch decoded.migrationKind {
         case .schema(let version): "board.v\(version).backup"
-        case .layout(let version): "board.v3.layout\(version).backup"
-        case .none: "board.v3.layout3.backup"
+        case .layout(let version): "board.v4.layout\(version).backup"
+        case .none: "board.v4.layout3.backup"
         }
     }
     private func backup(_ data: Data, prefix: String, directory: Int32) throws {
@@ -1456,23 +1481,119 @@ extension Subscription {
     }
 }
 
+enum TodoFrequency: String, Codable, CaseIterable, Sendable { case daily, weekly, monthly }
+
+struct TodoRecurrence: Codable, Equatable, Sendable {
+    var scheduleID: UUID
+    var frequency: TodoFrequency
+    var interval: Int
+    var anchor: DateOnly
+    enum CodingKeys: String, CodingKey, CaseIterable { case scheduleID, frequency, interval, anchor }
+    init(scheduleID: UUID, frequency: TodoFrequency, interval: Int, anchor: DateOnly) {
+        self.scheduleID = scheduleID; self.frequency = frequency; self.interval = interval; self.anchor = anchor
+    }
+    init(from decoder: Decoder) throws {
+        try requireKnownFields(decoder, CodingKeys.allCases.map(\.rawValue))
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        scheduleID = try c.decode(UUID.self, forKey: .scheduleID)
+        frequency = try c.decode(TodoFrequency.self, forKey: .frequency)
+        interval = try c.decode(Int.self, forKey: .interval)
+        anchor = try c.decode(DateOnly.self, forKey: .anchor)
+    }
+}
+extension TodoRecurrence {
+    /// Returns the anchor-based occurrence, without consulting a time zone or wall clock.
+    func occurrence(_ index: Int) -> DateOnly? {
+        guard (1...999).contains(interval), index >= 0 else { return nil }
+        switch frequency {
+        case .daily, .weekly:
+            let step = interval * (frequency == .weekly ? 7 : 1)
+            let days = index.multipliedReportingOverflow(by: step)
+            return days.overflow ? nil : anchor.addingDays(days.partialValue)
+        case .monthly:
+            let offset = index.multipliedReportingOverflow(by: interval)
+            guard !offset.overflow else { return nil }
+            let month = (anchor.year - 1) * 12 + anchor.month - 1
+            let target = month.addingReportingOverflow(offset.partialValue)
+            guard !target.overflow, (0..<(9999 * 12)).contains(target.partialValue) else { return nil }
+            let year = target.partialValue / 12 + 1, number = target.partialValue % 12 + 1
+            for day in stride(from: anchor.day, through: 1, by: -1) {
+                if let date = DateOnly(String(format: "%04d-%02d-%02d", year, number, day)) { return date }
+            }
+            return nil
+        }
+    }
+    func contains(_ date: DateOnly) -> Bool {
+        guard (1...999).contains(interval), date >= anchor else { return false }
+        let index: Int
+        switch frequency {
+        case .daily, .weekly:
+            let step = interval * (frequency == .weekly ? 7 : 1)
+            let diff = date.ordinal - anchor.ordinal
+            guard diff % step == 0 else { return false }; index = diff / step
+        case .monthly:
+            let diff = (date.year - anchor.year) * 12 + date.month - anchor.month
+            guard diff % interval == 0 else { return false }; index = diff / interval
+        }
+        return occurrence(index) == date
+    }
+    /// First occurrence strictly after completedDue and no earlier than today.
+    func next(after completedDue: DateOnly, today: DateOnly) throws -> DateOnly {
+        guard contains(completedDue) else { throw BoardStorageError(.invalidData) }
+        let threshold = max(completedDue.ordinal + 1, today.ordinal)
+        var low = 0, high = 3_652_060
+        while low < high {
+            let mid = (low + high) / 2
+            if let date = occurrence(mid), date.ordinal < threshold { low = mid + 1 } else { high = mid }
+        }
+        guard let date = occurrence(low), date.ordinal >= threshold else { throw BoardStorageError(.invalidData) }
+        return date
+    }
+}
+
+struct TodoCompletion: Codable, Equatable, Sendable {
+    var dueDate: DateOnly
+    var completedAt: Instant
+    var scheduleID: UUID
+    enum CodingKeys: String, CodingKey, CaseIterable { case dueDate, completedAt, scheduleID }
+    init(dueDate: DateOnly, completedAt: Instant, scheduleID: UUID) {
+        self.dueDate = dueDate; self.completedAt = completedAt; self.scheduleID = scheduleID
+    }
+    init(from decoder: Decoder) throws {
+        try requireKnownFields(decoder, CodingKeys.allCases.map(\.rawValue))
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dueDate = try c.decode(DateOnly.self, forKey: .dueDate)
+        completedAt = try c.decode(Instant.self, forKey: .completedAt)
+        scheduleID = try c.decode(UUID.self, forKey: .scheduleID)
+    }
+}
 struct Todo: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var title: String
     var completed: Bool = false
     var createdAt: Instant
     var completedAt: Instant? = nil
+    var dueDate: DateOnly? = nil
+    var projectID: UUID? = nil
+    var recurrence: TodoRecurrence? = nil
+    var completionHistory: [TodoCompletion] = []
 }
 extension Todo {
-    enum CodingKeys: String, CodingKey, CaseIterable { case id, title, completed, createdAt, completedAt }
-    init(from decoder: Decoder) throws {
-        try requireKnownFields(decoder, CodingKeys.allCases.map(\.rawValue))
+    enum CodingKeys: String, CodingKey, CaseIterable { case id, title, completed, createdAt, completedAt, dueDate, projectID, recurrence, completionHistory }
+    init(legacy decoder: Decoder) throws { try self.init(from: decoder, legacy: true) }
+    init(from decoder: Decoder) throws { try self.init(from: decoder, legacy: false) }
+    private init(from decoder: Decoder, legacy: Bool) throws {
+        try requireKnownFields(decoder, (legacy ? [CodingKeys.id, .title, .completed, .createdAt, .completedAt] : CodingKeys.allCases).map(\.rawValue))
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         title = try c.decode(String.self, forKey: .title)
         completed = try c.decode(Bool.self, forKey: .completed)
         createdAt = try c.decode(Instant.self, forKey: .createdAt)
         completedAt = try c.decodeIfPresent(Instant.self, forKey: .completedAt)
+        dueDate = legacy ? nil : try c.decodeIfPresent(DateOnly.self, forKey: .dueDate)
+        projectID = legacy ? nil : try c.decodeIfPresent(UUID.self, forKey: .projectID)
+        recurrence = legacy ? nil : try c.decodeIfPresent(TodoRecurrence.self, forKey: .recurrence)
+        completionHistory = legacy ? [] : try c.decode([TodoCompletion].self, forKey: .completionHistory)
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -1481,6 +1602,10 @@ extension Todo {
         try c.encode(completed, forKey: .completed)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(completedAt, forKey: .completedAt)
+        try c.encode(dueDate, forKey: .dueDate)
+        try c.encode(projectID, forKey: .projectID)
+        try c.encode(recurrence, forKey: .recurrence)
+        try c.encode(completionHistory, forKey: .completionHistory)
     }
 }
 
@@ -1732,7 +1857,25 @@ extension BoardState {
             currencyNumerators[value.currency] = try ExactDecimal.add(currencyNumerators[value.currency] ?? 0, ExactDecimal.multiply(amount, factor))
             try require(value.nextDate >= value.anchorDate)
         }
-        for value in todos { try require(title(value.title) && value.completed == (value.completedAt != nil)) }
+        let projectIDs = Set(projects.map(\.id))
+        for value in todos {
+            try require(title(value.title) && value.completed == (value.completedAt != nil))
+            try require(value.projectID.map { projectIDs.contains($0) } ?? true)
+            if let rule = value.recurrence {
+                try require(!value.completed && value.completedAt == nil && value.dueDate.map(rule.contains) == true)
+            }
+            var lastDue: [UUID: DateOnly] = [:]
+            for completion in value.completionHistory {
+                if let previous = lastDue[completion.scheduleID] { try require(previous < completion.dueDate) }
+                if let rule = value.recurrence, completion.scheduleID == rule.scheduleID {
+                    try require(rule.contains(completion.dueDate))
+                }
+                lastDue[completion.scheduleID] = completion.dueDate
+            }
+            if let rule = value.recurrence, let previous = lastDue[rule.scheduleID], let due = value.dueDate {
+                try require(previous < due)
+            }
+        }
         for value in habits { try require(title(value.title) && value.marks == Array(Set(value.marks)).sorted()) }
         try require(worldClockCities.count <= 4 && Set(worldClockCities.map(\.id)).count == worldClockCities.count && worldClockCities.allSatisfy { !$0.id.isEmpty && $0.id.count <= 100 })
         try require(Set(focusSessions.map(\.id)).count == focusSessions.count)

@@ -198,7 +198,12 @@ struct NativeViewportStateFile: BoardPersistence {
                 switch atom { case .layout(.setStep), .layout(.setSplit), .layout(.reset), .panel(.resetLayout): true; default: false }
             }
             undoable = value && !sizing
-        case .saveEvent(let input): if case .metadataOnly = input { undoable = false } else { undoable = true }
+        case .saveEvent(let input):
+            switch input {
+            case .metadataOnly: undoable = false
+            case .calendarCreate(let draft, _): undoable = draft.recurrence == nil
+            case .calendarEdit: undoable = true
+            }
         case .notification: undoable = true
         default: undoable = false
         }
@@ -753,6 +758,8 @@ struct NativeViewportStateFile: BoardPersistence {
             original = record; draft = nil; patch = metadata
         }
         if let draft {
+            guard original == nil || draft.recurrence == nil else { throw AppFailure(code: .validationFailed, field: .event(.recurrence)) }
+            _ = try draft.recurrence.map { try $0.resolved(start: draft.start) }
             try NativeBoardMutator.title(draft.title, field: .event(.title))
             guard draft.start.timeIntervalSinceReferenceDate.isFinite, draft.end.timeIntervalSinceReferenceDate.isFinite,
                   draft.end > draft.start, DateOnly(date: draft.start, timeZone: preferences.timeZone) != nil,
@@ -776,13 +783,13 @@ struct NativeViewportStateFile: BoardPersistence {
             let saved = try await calendars.save(draft, original: original)
             entry.afterEvent = saved
             if let original { remapCreated(original: original, saved: saved) } else { createdIDs.insert(saved.id) }
-            let token = UndoToken(value: UUID()); entry.token = token; tokens[token] = entry.context.id
+            if entry.undoable { let token = UndoToken(value: UUID()); entry.token = token; tokens[token] = entry.context.id }
             var status = MetadataStatus.saved, warning: AppFailure?
             do { try store.commit(NativeBoardMutator.metadata(patch, on: store.state, old: original, saved: saved)) }
             catch { status = .failed; warning = NativeRuntimeErrors.normalize(error) }
             entry.inverse = NativeBoardInverse(before: before, after: store.state)
             return EventSaveResult(savedEvent: saved, calendarWritten: true, metadataStatus: status, warning: warning,
-                                   undo: descriptor(entry, kind: original == nil ? .create : .edit))
+                                   undo: entry.undoable ? descriptor(entry, kind: original == nil ? .create : .edit) : nil)
         }
         let fresh = try await calendars.current(original!, checkVersion: false)
         try store.commit(NativeBoardMutator.metadata(patch, on: store.state, old: original, saved: fresh))

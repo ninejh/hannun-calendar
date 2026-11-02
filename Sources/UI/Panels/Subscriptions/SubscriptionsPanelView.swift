@@ -165,7 +165,7 @@ import AppKit
             contentCanvas.fonts[key + ".amount"] = NativeFont.eventTime
             items.append(NativeRenderItem(id: key + ".due", rect: CGRect(x: available - NativeSize.compactTarget - badgeWidth, y: y, width: badgeWidth, height: rowHeight), label: badge, kind: .badge, color: .textSecondary))
             contentCanvas.fonts[key + ".due"] = NativeFont.badge
-            items.append(NativeRenderItem(id: key + ".more", rect: CGRect(x: scroll.contentSize.width - NativeSize.compactTarget, y: y, width: NativeSize.compactTarget, height: rowHeight), label: full, kind: .button))
+            items.append(NativeRenderItem(id: key + ".more", rect: CGRect(x: scroll.contentSize.width - NativeSize.compactTarget, y: y, width: NativeSize.compactTarget, height: rowHeight), label: context.text("a11y.item_options", values: ["0": value.name]), kind: .button))
             contentCanvas.displayText[key + ".more"] = "···"
             if separateCycle {
                 items.append(NativeRenderItem(id: key + ".cycle", rect: CGRect(x: 0, y: y + rowHeight * 2, width: available, height: rowHeight), label: cycle, kind: .text, color: .textSecondary))

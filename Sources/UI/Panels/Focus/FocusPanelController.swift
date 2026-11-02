@@ -274,8 +274,10 @@ import AppKit
         notificationItem.enabled = true; items.append(notificationItem); footerY += row
         var bottom = max(footerY, durationY + row * 2)
         if active {
-            bottom = clearPartialNotice(bottom, height: row * 2, viewportHeight: viewport.contentSize.height)
-            add("focusTimer.locked", context.text("timer.locked_running"), CGRect(x: 0, y: bottom, width: width, height: row * 2), color: .textQuiet); bottom += row * 2
+            let message = context.text("timer.locked_running")
+            let height = max(row * 2, ClockFocusCanvas.lockedNoticeHeight(message, width: width))
+            bottom = clearPartialNotice(bottom, height: height, viewportHeight: viewport.contentSize.height)
+            add("focusTimer.locked", message, CGRect(x: 0, y: bottom, width: width, height: height), color: .textQuiet); bottom += height
         }
         if focus.status == .completed {
             add("focusTimer.completion", context.text(focus.mode == .focus ? "timer.session_done" : "timer.break_done"), CGRect(x: 0, y: bottom, width: width, height: row * 2), color: .success); bottom += row * 2
@@ -391,8 +393,10 @@ import AppKit
         add("focusTimer.today", context.text("timer.today_focus", values: ["0": String(todaySeconds / 60)]), CGRect(x: 0, y: y, width: width, height: row), color: .textSecondary); y += row
         items.append(NativeRenderItem(id: "focusTimer.notify", rect: CGRect(x: 0, y: y, width: width, height: row), label: context.text("timer.notify_finish"), kind: .checkBox, checked: settings.notifyOnFinish)); y += row
         if active {
-            y = clearPartialNotice(y, height: row, viewportHeight: visibleHeight)
-            add("focusTimer.locked", context.text("timer.locked_running"), CGRect(x: 0, y: y, width: width, height: row), color: .textQuiet); y += row
+            let message = context.text("timer.locked_running")
+            let height = max(row, ClockFocusCanvas.lockedNoticeHeight(message, width: width))
+            y = clearPartialNotice(y, height: height, viewportHeight: visibleHeight)
+            add("focusTimer.locked", message, CGRect(x: 0, y: y, width: width, height: height), color: .textQuiet); y += height
         }
         if focus.status == .completed { add("focusTimer.completion", context.text(focus.mode == .focus ? "timer.session_done" : "timer.break_done"), CGRect(x: 0, y: y, width: width, height: row), color: .success); y += row }
         if state.activity.loading { add("focusTimer.loading", context.text("loading.label"), CGRect(x: 0, y: y, width: width, height: row), color: .textQuiet); y += row }

@@ -21,6 +21,7 @@ enum BoardPreview {
             case .delete(let id):
                 board.projects.removeAll { $0.id == id }
                 board.eventProjectLinks = board.eventProjectLinks.filter { $0.value.lowercased() != id.uuidString.lowercased() }
+                for index in board.todos.indices where board.todos[index].projectID == id { board.todos[index].projectID = nil }
             }
         case .countdown(let edit):
             switch edit {
@@ -104,7 +105,8 @@ enum BoardPreview {
             switch p {
             case .createSubscription(let v): [.subscription(v.id)]
             case .updateSubscription(let id, _), .deleteSubscription(let id): [.subscription(id)]
-            case .createTodo(let id, _), .updateTodo(let id, _), .deleteTodo(let id): [.todo(id)]
+            case .createTodo(let id, _), .updateTodo(let id, _), .deleteTodo(let id), .completeTodoOccurrence(let id, _, _): [.todo(id)]
+            case .createTodoDetailed(let input): [.todo(input.id)]
             case .createHabit(let id, _), .updateHabit(let id, _), .setHabitToday(let id, _, _), .deleteHabit(let id): [.habit(id)]
             case .addCity(let id), .deleteCity(let id): [.city(id)]
             case .selectSlot(let slot, _), .setSlotVisible(let slot, _): [.slot(slot)]

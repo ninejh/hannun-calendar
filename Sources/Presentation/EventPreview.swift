@@ -12,7 +12,7 @@ enum EventPreview {
             let item = CalendarItem(itemIdentifier: temporary, eventIdentifier: temporary, calendarID: calendarID,
                                     calendarTitle: source?.title ?? "", colorHex: source?.colorHex ?? "557C68",
                                     title: draft.title, start: draft.start, end: draft.end, allDay: draft.allDay,
-                                    location: draft.location, notes: draft.notes, recurring: false, writable: source?.writable ?? true)
+                                    location: draft.location, notes: draft.notes, recurring: draft.recurrence != nil, writable: source?.writable ?? true)
             snapshot.calendar.records.append(EventRecord(item: item)); apply(metadata, pinKey: item.pinKey, board: &snapshot.board)
         case .calendarEdit(let identity, _, let draft, let metadata):
             guard let index = snapshot.calendar.records.firstIndex(where: { $0.id == identity.id }), snapshot.calendar.records[index].item.writable else { return }
