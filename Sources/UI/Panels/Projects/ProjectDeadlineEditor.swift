@@ -1,5 +1,16 @@
 import AppKit
 
+@MainActor private final class ProjectDeadlineSurface: PanelContainerView {
+    var showSelector: (@MainActor (String) -> Bool)?
+    override func showMenu(for id: String) -> Bool { showSelector?(id) ?? false }
+    override func paint(_ item: NativeRenderItem) {
+        guard item.id == "management.heading" || item.id == "management.error" else { super.paint(item); return }
+        let rect = item.rect.insetBy(dx: NativeSpace.sm, dy: 0)
+        (item.label as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                      attributes: NativeFont.attributes(font: NativeFont.primary, color: theme.color(item.color), truncation: .byWordWrapping))
+    }
+}
+
 /// Nonmodal form: the platform owns text/IME/date editing; the kit owns the surface/actions.
 @MainActor final class ProjectDeadlineEditor: NSObject, NSTextFieldDelegate, NSPopoverDelegate {
     enum Kind { case project, countdown }
@@ -12,6 +23,9 @@ import AppKit
     let surface: PanelContainerView
     let popover = NSPopover()
     private let host = NSViewController()
+    private let scroll = OverflowScrollView(frame: .zero)
+    private var availableFrame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
+    private var windowObservations: [NSObjectProtocol] = []
     private var commit: (@MainActor (String, DateOnly?, ProjectStatus) -> OperationHandle?)?
     var onClose: (@MainActor () -> Void)?
     private(set) var validationKey: String?
@@ -43,7 +57,7 @@ import AppKit
         let dateKey = kind == .project ? "projects.field_target" : "deadlines.field_date"
         titleField = NativeTextField(label: context.text(titleKey), identifier: "management.\(id).title")
         datePicker = NativeDatePicker(label: context.text(dateKey), identifier: "management.\(id).date", timeZone: TimeZone(identifier: context.presentation.state.snapshot.environment.timeZone) ?? .current)
-        surface = PanelContainerView(frame: CGRect(x: 0, y: 0, width: NativeSize.popoverWidth, height: NativeSize.popoverWidth - NativeSpace.xxl), focus: context.focus)
+        surface = ProjectDeadlineSurface(frame: CGRect(x: 0, y: 0, width: NativeSize.popoverWidth, height: NativeSize.popoverWidth - NativeSpace.xxl), focus: context.focus)
         super.init()
         titleField.stringValue = context.presentation.state.drafts[draftKey]?.textValue?.text ?? title
         datePicker.day = initialDay
@@ -55,16 +69,37 @@ import AppKit
             colorWell.setAccessibilityIdentifier("management.color"); surface.addSubview(colorWell)
         }
         surface.onAction = { [weak self] action in self?.act(action) }
+        (surface as? ProjectDeadlineSurface)?.showSelector = { [weak self] action in
+            guard let self, action == "management.status", !self.pending, !self.disposed,
+                  self.surface.window != nil,
+                  self.surface.items.contains(where: { $0.id == action && $0.enabled && $0.isInteractive }),
+                  (self.titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+                  (self.datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return false }
+            self.act(action)
+            return true
+        }
         surface.onShortcut = { [weak self] event in
             guard event.keyCode == 53, let self else { return false }
             return self.cancel()
         }
-        host.view = surface; popover.contentViewController = host; popover.behavior = .transient; popover.delegate = self
+        scroll.allowsBothAxes = true; scroll.documentView = surface; host.view = scroll; popover.contentViewController = host; popover.behavior = .transient; popover.delegate = self
         popover.animates = false // Kit opacity supplies the approved fade; no system zoom.
         render()
     }
     func show(relativeTo rect: CGRect, of view: NSView) {
-        guard view.window != nil else { return }
+        guard let window = view.window else { return }
+        let anchor = window.convertToScreen(view.convert(rect, to: nil))
+        let screen = NSScreen.screens.first(where: { $0.frame.intersects(anchor) }) ?? window.screen
+        if let screen { layoutContent(visibleFrame: screen.visibleFrame) }
+        for observation in windowObservations { NotificationCenter.default.removeObserver(observation) }
+        windowObservations = [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self, weak view] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window = view?.window, let screen = window.screen else { return }
+                    self.layoutContent(visibleFrame: screen.visibleFrame)
+                }
+            }
+        }
         popover.show(relativeTo: rect, of: view, preferredEdge: .maxY)
         surface.window?.makeFirstResponder(titleField); titleField.selectText(nil)
         if let layer = surface.layer { NativeMotion.apply(.popover, to: layer, reduceMotion: context.presentation.state.snapshot.environment.reduceMotion) }
@@ -79,39 +114,63 @@ import AppKit
         }
         render()
     }
+    func layoutContent(visibleFrame: CGRect) {
+        availableFrame = visibleFrame; render()
+    }
     private func render() {
         let environment = context.presentation.state.snapshot.environment
         if surface.theme.appearance != environment.resolvedAppearance { surface.theme = NativeTheme(appearance: environment.resolvedAppearance) }
         surface.reduceMotion = environment.reduceMotion
-        let width = surface.bounds.width, inset = NativeSpace.xl, line = NativeSize.compactTarget
+        let inset = NativeSpace.xl, line = NativeSize.compactTarget
+        let headline = creating ? (kind == .project ? "projects.new_title" : "deadlines.new_title") : (kind == .project ? "projects.rename" : "deadlines.rename")
+        let titleKey = kind == .project ? "projects.field_name" : "deadlines.field_title"
+        let messages = [context.text(headline), context.text(titleKey), context.text(kind == .project ? "projects.target_date_optional" : "deadlines.field_date"),
+                        titleField.stringValue, (validationKey ?? failure?.messageKey).map { context.text($0) } ?? ""]
+        let naturalWidth = messages.map { ceil(($0 as NSString).size(withAttributes: [.font: NativeFont.primary]).width) }.max() ?? 0
+        let availableWidth = max(1, availableFrame.width - NativeSpace.lg * 2)
+        let width = min(max(NativeSize.popoverWidth, naturalWidth + inset * 2 + NativeSpace.lg), max(NativeSize.popoverWidth, availableWidth))
         titleField.setAccessibilityLabel(context.text(kind == .project ? "projects.field_name" : "deadlines.field_title"))
         datePicker.setAccessibilityLabel(context.text(kind == .project ? "projects.field_target" : "deadlines.field_date"))
-        titleField.frame = CGRect(x: inset, y: line * 2, width: width - inset * 2, height: line)
-        datePicker.frame = CGRect(x: inset, y: line * 4, width: width - inset * 2, height: line)
         titleField.isEnabled = !pending; datePicker.isEnabled = !pending
         colorWell.isEnabled = !pending; colorWell.setAccessibilityLabel(context.text("projects.field_color"))
         datePicker.isHidden = !targetEnabled
-        let headline = creating ? (kind == .project ? "projects.new_title" : "deadlines.new_title") : (kind == .project ? "projects.rename" : "deadlines.rename")
-        let titleKey = kind == .project ? "projects.field_name" : "deadlines.field_title"
-        var items = [NativeRenderItem(id: "management.heading", rect: CGRect(x: inset, y: NativeSpace.sm, width: width - inset * 2, height: line), label: context.text(headline), kind: .text),
-                     NativeRenderItem(id: "management.title.label", rect: CGRect(x: inset, y: line, width: width - inset * 2, height: line), label: context.text(titleKey), kind: .text),
-                     NativeRenderItem(id: "management.date.toggle", rect: CGRect(x: inset, y: line * 3, width: width - inset * 2, height: line), label: context.text(kind == .project ? "projects.target_date_optional" : "deadlines.field_date"), kind: kind == .project ? .checkBox : .text, enabled: !pending, checked: targetEnabled)]
+        let bodyWidth = max(1, width - inset * 2)
+        func wrapped(_ value: String) -> CGFloat {
+            let attributes = NativeFont.attributes(font: NativeFont.primary, color: .labelColor, truncation: .byWordWrapping)
+            return max(line, ceil((value as NSString).boundingRect(with: CGSize(width: max(1, bodyWidth - NativeSpace.lg), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height))
+        }
+        var y = NativeSpace.sm
+        let heading = context.text(headline), headingHeight = wrapped(heading)
+        var items = [NativeRenderItem(id: "management.heading", rect: CGRect(x: inset, y: y, width: bodyWidth, height: headingHeight), label: heading, kind: .text)]
+        y += headingHeight
+        items.append(NativeRenderItem(id: "management.title.label", rect: CGRect(x: inset, y: y, width: bodyWidth, height: line), label: context.text(titleKey), kind: .text)); y += line
+        titleField.frame = CGRect(x: inset, y: y, width: bodyWidth, height: line); y += line
+        items.append(NativeRenderItem(id: "management.date.toggle", rect: CGRect(x: inset, y: y, width: bodyWidth, height: line), label: context.text(kind == .project ? "projects.target_date_optional" : "deadlines.field_date"), kind: kind == .project ? .checkBox : .text, enabled: !pending, checked: targetEnabled)); y += line
+        if targetEnabled { datePicker.frame = CGRect(x: inset, y: y, width: bodyWidth, height: line); y += line }
         if creating && kind == .project {
-            items.append(NativeRenderItem(id: "management.status", rect: CGRect(x: inset, y: line * 5 + NativeSpace.xs, width: width - inset * 2, height: line), label: context.text(ManagementCopy.status(status)), kind: .button, enabled: !pending, fill: .projectStatusBg))
+            y += NativeSpace.xs
+            items.append(NativeRenderItem(id: "management.status", rect: CGRect(x: inset, y: y, width: bodyWidth, height: line), label: context.text(ManagementCopy.status(status)), kind: .menuButton, enabled: !pending, fill: .projectStatusBg)); y += line
         }
         if kind == .project {
-            let colorY = line * (creating ? 6 : 5) + NativeSpace.xs
-            colorWell.frame = CGRect(x: width - inset - line * 2, y: colorY, width: line * 2, height: line)
-            items.append(NativeRenderItem(id: "management.color.label", rect: CGRect(x: inset, y: colorY, width: width - inset * 2 - line * 2, height: line), label: context.text("projects.field_color"), kind: .text))
+            y += NativeSpace.xs
+            colorWell.frame = CGRect(x: width - inset - line * 2, y: y, width: line * 2, height: line)
+            items.append(NativeRenderItem(id: "management.color.label", rect: CGRect(x: inset, y: y, width: max(1, bodyWidth - line * 2), height: line), label: context.text("projects.field_color"), kind: .text)); y += line
         }
         if let key = validationKey ?? failure?.messageKey {
-            items.append(NativeRenderItem(id: "management.error", rect: CGRect(x: inset, y: line * (kind == .project ? 7 : 6) + NativeSpace.sm, width: width - inset * 2, height: line * 2), label: context.text(key), kind: .text, color: .danger))
+            y += NativeSpace.sm
+            let message = context.text(key), height = wrapped(message)
+            items.append(NativeRenderItem(id: "management.error", rect: CGRect(x: inset, y: y, width: bodyWidth, height: height), label: message, kind: .text, color: .danger)); y += height
         }
-        let buttonY = surface.bounds.height - line - inset
+        let buttonY = y + NativeSpace.sm
         items.append(NativeRenderItem(id: "management.cancel", rect: CGRect(x: inset, y: buttonY, width: line * 3, height: line), label: context.text("event.cancel"), kind: .button, enabled: !pending))
         let key = pending ? "loading.label" : failure != nil ? "error.retry_action" : creating ? (kind == .project ? "projects.submit_add" : "deadlines.submit_add") : "event.save_changes"
         items.append(NativeRenderItem(id: "management.submit", rect: CGRect(x: width / 2, y: buttonY, width: width / 2 - inset, height: line), label: context.text(key), kind: .button, enabled: !pending, fill: .fill, color: .toastText))
+        let contentHeight = buttonY + line + inset
+        surface.frame = CGRect(x: 0, y: 0, width: width, height: contentHeight)
+        scroll.frame.size = CGSize(width: min(width, availableWidth), height: min(contentHeight, max(1, availableFrame.height - NativeSpace.lg * 2)))
+        popover.contentSize = scroll.frame.size
         surface.update(items: items)
+        scroll.updateFade()
     }
     private func act(_ action: String) {
         guard !pending else { return }
@@ -191,7 +250,8 @@ import AppKit
     private func finishClose() { popover.close(); onClose?() }
     func dispose() {
         guard !disposed else { return }; disposed = true
+        for observation in windowObservations { NotificationCenter.default.removeObserver(observation) }; windowObservations.removeAll()
         colorWell.deactivate(); popover.delegate = nil; popover.close(); onClose = nil; commit = nil; statusMenu?.dispose(); statusMenu = nil
-        titleField.delegate = nil; titleField.target = nil; datePicker.target = nil; colorWell.target = nil; surface.dispose()
+        titleField.delegate = nil; titleField.target = nil; datePicker.target = nil; colorWell.target = nil; scroll.dispose(); scroll.documentView = nil; surface.dispose()
     }
 }

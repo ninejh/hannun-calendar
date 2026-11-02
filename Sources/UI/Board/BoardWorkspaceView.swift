@@ -330,19 +330,22 @@ import AppKit
     let popover = NSPopover()
     private weak var handle: GridHandleView?
     private let title = NSTextField(wrappingLabelWithString: "")
+    private let scroll = OverflowScrollView(frame: .zero)
+    private let document = NSView(frame: .zero)
     private var buttons: [NSButton] = []
     private var reasons: [NSTextField] = []
     var choose: ((Int) -> Void)?
     init(handle: GridHandleView) {
         self.handle = handle; super.init()
-        let controller = NSViewController(), content = NSView(frame: CGRect(x: 0, y: 0, width: 280, height: 310))
-        controller.view = content; popover.contentViewController = controller; popover.behavior = .transient; popover.delegate = self
-        title.frame = CGRect(x: 16, y: 264, width: 248, height: 40); content.addSubview(title)
+        let controller = NSViewController()
+        scroll.frame = CGRect(x: 0, y: 0, width: 280, height: 310)
+        scroll.documentView = document
+        controller.view = scroll; popover.contentViewController = controller; popover.behavior = .transient; popover.delegate = self
+        document.addSubview(title)
         for index in 0..<4 {
-            let y = 214 - CGFloat(index) * 55
             let button = NSButton(title: "", target: self, action: #selector(selected(_:)))
-            button.tag = index; button.frame = CGRect(x: 16, y: y, width: 128, height: 44); content.addSubview(button); buttons.append(button)
-            let reason = NSTextField(wrappingLabelWithString: ""); reason.frame = CGRect(x: 150, y: y, width: 114, height: 44); content.addSubview(reason); reasons.append(reason)
+            button.tag = index; document.addSubview(button); buttons.append(button)
+            let reason = NSTextField(wrappingLabelWithString: ""); document.addSubview(reason); reasons.append(reason)
         }
     }
     func update(title value: String, options: [(String, String?)]) {
@@ -351,11 +354,51 @@ import AppKit
             buttons[index].title = option.0; buttons[index].isEnabled = option.1 == nil
             reasons[index].stringValue = option.1 ?? ""; buttons[index].setAccessibilityHelp(option.1)
         }
+        layoutContent()
     }
-    func show() { guard let handle, handle.window != nil else { return }; popover.show(relativeTo: handle.bounds, of: handle, preferredEdge: .maxY) }
+    private func layoutContent() {
+        let previousViewport = scroll.contentView.bounds
+        let wasAtTop = document.bounds.height <= previousViewport.height || abs(previousViewport.maxY - document.bounds.maxY) < 1
+        let visible = handle?.window?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
+        let inset = NativeSpace.lg, gap = NativeSpace.sm
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let buttonWidth = max(128, buttons.map { ceil(($0.title as NSString).size(withAttributes: [.font: font]).width) + inset * 2 }.max() ?? 0)
+        let reasonWidth = max(114, reasons.map { ceil(($0.stringValue as NSString).size(withAttributes: [.font: $0.font ?? font]).width) }.max() ?? 0)
+        let maxWidth = max(1, visible.width - inset * 2)
+        let width = min(maxWidth, max(280, buttonWidth + reasonWidth + gap + inset * 2))
+        let actualButtonWidth = min(buttonWidth, max(1, (width - inset * 2 - gap) / 2))
+        let actualReasonWidth = max(1, width - inset * 2 - gap - actualButtonWidth)
+        func height(_ field: NSTextField, width: CGFloat) -> CGFloat {
+            guard !field.stringValue.isEmpty, let cell = field.cell else { return 0 }
+            return ceil(cell.cellSize(forBounds: CGRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)).height)
+        }
+        let titleHeight = max(NativeSize.compactTarget, height(title, width: max(1, width - inset * 2)))
+        let rowHeights = reasons.map { max(44, height($0, width: actualReasonWidth)) }
+        let contentHeight = inset * 2 + titleHeight + gap + rowHeights.reduce(0, +) + gap * CGFloat(max(0, rowHeights.count - 1))
+        let viewportHeight = min(contentHeight, max(1, visible.height - inset * 2))
+        scroll.frame.size = CGSize(width: width, height: viewportHeight)
+        popover.contentSize = scroll.frame.size
+        document.frame = CGRect(x: 0, y: 0, width: width, height: contentHeight)
+        scroll.layoutSubtreeIfNeeded()
+        if wasAtTop {
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: max(0, contentHeight - scroll.contentSize.height)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        var y = contentHeight - inset - titleHeight
+        title.frame = CGRect(x: inset, y: y, width: max(1, width - inset * 2), height: titleHeight)
+        y -= gap
+        for index in buttons.indices {
+            y -= rowHeights[index]
+            buttons[index].frame = CGRect(x: inset, y: y, width: actualButtonWidth, height: rowHeights[index])
+            reasons[index].frame = CGRect(x: inset + actualButtonWidth + gap, y: y, width: actualReasonWidth, height: rowHeights[index])
+            y -= gap
+        }
+        scroll.updateFade()
+    }
+    func show() { guard let handle, handle.window != nil else { return }; layoutContent(); popover.show(relativeTo: handle.bounds, of: handle, preferredEdge: .maxY) }
     @objc private func selected(_ sender: NSButton) { choose?(sender.tag) }
     func popoverDidClose(_ notification: Notification) { if let handle { handle.window?.makeFirstResponder(handle) } }
-    func close() { choose = nil; popover.close(); popover.delegate = nil }
+    func close() { choose = nil; popover.close(); popover.delegate = nil; scroll.dispose() }
 }
 
 @MainActor final class GridDotsView: NSView {

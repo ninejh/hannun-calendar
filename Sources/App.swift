@@ -368,29 +368,88 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     @discardableResult func hideBoard() async -> CommandReceipt {
         let result = await flushForLifecycle(); panel.orderOut(nil); return result
     }
-    func undoRespectingText() {
-        if let editor = panel.firstResponder as? NSTextView {
-            // A text session owns Undo even when its history is empty or IME is composing.
-            guard !editor.hasMarkedText(), let undo = editor.undoManager, undo.canUndo else { return }
-            undo.undo()
-        } else { presentation.send(.undo) }
+    private enum EditingHistoryOwner {
+        case text(NSTextView)
+        case board
+        case uncertain
     }
+    private func editingHistoryOwner() -> EditingHistoryOwner {
+        guard !disposed, panel.isVisible, panel.contentView === root else { return .uncertain }
+        // Only this composition's window tree can own a history operation.
+        func descendants(_ window: NSWindow) -> [NSWindow] {
+            (window.childWindows ?? []).filter { $0.parent === window }.flatMap { [$0] + descendants($0) }
+        }
+        let children = descendants(panel)
+        let visibleChildren = children.filter { child in
+            var ancestor: NSWindow? = child
+            while let current = ancestor, current !== panel {
+                guard current.isVisible else { return false }
+                ancestor = current.parent
+            }
+            return ancestor === panel
+        }
+        let window: NSWindow
+        if let key = NSApp.keyWindow {
+            guard key.isVisible, key === panel || visibleChildren.contains(where: { $0 === key }) else { return .uncertain }
+            window = key
+        } else {
+            // A nonactivating desktop panel may retain a valid editor without a key window.
+            guard !NSApp.isActive, children.count <= 1 else { return .uncertain }
+            let candidates = [panel] + visibleChildren
+            guard !NSApp.windows.contains(where: { other in
+                other.isVisible && other.canBecomeKey && !candidates.contains(where: { $0 === other })
+            }) else { return .uncertain }
+            if let eventNumber = NSApp.currentEvent?.windowNumber, eventNumber != 0 {
+                guard let eventWindow = candidates.first(where: { $0.windowNumber == eventNumber }),
+                      candidates.filter({ $0.windowNumber == eventNumber }).count == 1,
+                      eventWindow !== panel || children.isEmpty else { return .uncertain }
+                window = eventWindow
+            } else {
+                // With no event window, only a sole visible panel's current text session is identifiable.
+                guard children.isEmpty, panel.firstResponder is NSTextView else { return .uncertain }
+                window = panel
+            }
+        }
+        guard let responder = window.firstResponder else { return .uncertain }
+        if let editor = responder as? NSTextView {
+            guard editor.window === window else { return .uncertain }
+            if editor.isFieldEditor {
+                guard let field = editor.delegate as? NSTextField, field.window === window,
+                      field.currentEditor() === editor, !field.isHiddenOrHasHiddenAncestor else { return .uncertain }
+            } else if editor.isHiddenOrHasHiddenAncestor { return .uncertain }
+            return .text(editor)
+        }
+        // An open child is an editing context even while a non-text control has focus.
+        guard window === panel, children.isEmpty, let view = responder as? NSView,
+              view.window === panel, !view.isHiddenOrHasHiddenAncestor else { return .uncertain }
+        return .board
+    }
+    private func performEditingHistory(redo: Bool) {
+        switch editingHistoryOwner() {
+        case .text(let editor):
+            // A text session owns both directions even with no history or an active IME.
+            guard !editor.hasMarkedText(), let undo = editor.undoManager else { return }
+            if redo { if undo.canRedo { undo.redo() } }
+            else { if undo.canUndo { undo.undo() } }
+        case .board:
+            if !redo { presentation.send(.undo) }
+        case .uncertain: break
+        }
+    }
+    func undoRespectingText() { performEditingHistory(redo: false) }
     @objc private func editingAction(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String,
               ["selectAll:", "copy:", "cut:", "paste:", "undo:", "redo:"].contains(name) else { return }
         let action = Selector(name)
         // A generic canvas responder may consume undo: without board history.
         // Route it through the current text session or semantic board Undo first.
-        if name == "undo:" { undoRespectingText(); return }
+        if name == "undo:" || name == "redo:" { performEditingHistory(redo: name == "redo:"); return }
         // Active windows keep AppKit's standard responder-chain resolution first.
         if NSApp.isActive, NSApp.keyWindow != nil, NSApp.sendAction(action, to: nil, from: sender) { return }
         // An inactive desktop panel may own a field editor while NSApp.keyWindow is nil.
         // Forward the actual menu command to that native responder without activating it.
         guard let editor = panel.firstResponder as? NSTextView else { return }
-        if name == "redo:" {
-            guard !editor.hasMarkedText(), let undo = editor.undoManager, undo.canRedo else { return }
-            undo.redo()
-        } else { _ = NSApp.sendAction(action, to: editor, from: sender) }
+        _ = NSApp.sendAction(action, to: editor, from: sender)
     }
     @objc private func showAction() { showBoard() }
     @objc private func hideAction() { Task { @MainActor in _ = await self.hideBoard() } }
@@ -469,7 +528,7 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
         result.append(json); result.append(png); return result
     }
     var demoCheckPassed: Bool {
-        isReady && application.current.board.version == 3 && root.slotHosts.count == 4 && !root.calendarView.cellRects.isEmpty &&
+        isReady && application.current.board.version == 4 && root.slotHosts.count == 4 && !root.calendarView.cellRects.isEmpty &&
         application.configuration.adapterMode == .fake && application.calendars.demo && application.calendars.accountAccessCount == 0 &&
         application.panels.fakeTransport != nil && application.panels.fakeNotifications != nil
     }
@@ -626,7 +685,7 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
                 passed = false
                 if diagnostics { print(NativeSnapshotFailure(stage: "flush", domain: "NativeApplication", code: failure.code.rawValue).diagnostic) }
             }
-            print(passed ? "PASS: native composition, schema3 and fake adapters" : "FAIL: native composition self-check")
+            print(passed ? "PASS: native composition, schema4 and fake adapters" : "FAIL: native composition self-check")
             session.dispose(); exit(passed ? 0 : 1)
         }
     }

@@ -56,7 +56,12 @@ enum NativeAxis: String, Sendable { case horizontal, vertical }
     var axis: NativeAxis = .vertical {
         didSet { configureAxis(); updateFade() }
     }
+    /// Explicit opt-in for a viewport whose document can overflow in both directions.
+    var allowsBothAxes = false {
+        didSet { if oldValue != allowsBothAxes { configureAxis(); updateFade() } }
+    }
     private let fade = CAGradientLayer()
+    private let crossFade = CAGradientLayer()
     private var observation: NSObjectProtocol?
     override init(frame: NSRect) {
         super.init(frame: frame); drawsBackground = false; autohidesScrollers = true; configureAxis()
@@ -67,11 +72,16 @@ enum NativeAxis: String, Sendable { case horizontal, vertical }
     }
     convenience init(frame: NSRect, axis: NativeAxis) { self.init(frame: frame); self.axis = axis; configureAxis() }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-    private func configureAxis() { hasVerticalScroller = axis == .vertical; hasHorizontalScroller = axis == .horizontal }
+    private func configureAxis() { hasVerticalScroller = allowsBothAxes || axis == .vertical; hasHorizontalScroller = allowsBothAxes || axis == .horizontal }
     override func layout() { super.layout(); updateFade() }
     func updateFade() {
         guard let documentView else { contentView.layer?.mask = nil; return }
         let viewport = contentView.bounds, document = documentView.bounds
+        if allowsBothAxes {
+            updateBothFades(viewport: viewport, document: document)
+            return
+        }
+        fade.mask = nil
         let horizontal = axis == .horizontal
         let length = horizontal ? viewport.width : viewport.height
         let documentLength = horizontal ? document.width : document.height
@@ -88,6 +98,34 @@ enum NativeAxis: String, Sendable { case horizontal, vertical }
         fade.colors = [NSColor.black.withAlphaComponent(low ? 0 : 1).cgColor, NSColor.black.cgColor, NSColor.black.cgColor, NSColor.black.withAlphaComponent(high ? 0 : 1).cgColor]
         fade.locations = [0, NSNumber(value: edge), NSNumber(value: 1 - edge), 1]
         contentView.layer?.mask = fade
+        CATransaction.commit()
+    }
+    private func updateBothFades(viewport: CGRect, document: CGRect) {
+        guard viewport.width > 0, viewport.height > 0,
+              document.width > viewport.width || document.height > viewport.height else {
+            fade.mask = nil; contentView.layer?.mask = nil; return
+        }
+        contentView.wantsLayer = true
+        guard let layer = contentView.layer else { return }
+        func colors(before: Bool, after: Bool) -> [CGColor] {
+            [NSColor.black.withAlphaComponent(before ? 0 : 1).cgColor, NSColor.black.cgColor,
+             NSColor.black.cgColor, NSColor.black.withAlphaComponent(after ? 0 : 1).cgColor]
+        }
+        func locations(_ length: CGFloat) -> [NSNumber] {
+            let edge = min(0.5, NativeSize.overflowEdge / length)
+            return [0, NSNumber(value: edge), NSNumber(value: 1 - edge), 1]
+        }
+        let xOverflow = document.width > viewport.width, yOverflow = document.height > viewport.height
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        fade.frame = layer.bounds; fade.isGeometryFlipped = contentView.isFlipped
+        fade.startPoint = CGPoint(x: 0, y: 0.5); fade.endPoint = CGPoint(x: 1, y: 0.5)
+        fade.colors = colors(before: xOverflow && viewport.minX > document.minX, after: xOverflow && viewport.maxX < document.maxX)
+        fade.locations = locations(viewport.width)
+        crossFade.frame = fade.bounds; crossFade.isGeometryFlipped = contentView.isFlipped
+        crossFade.startPoint = CGPoint(x: 0.5, y: 0); crossFade.endPoint = CGPoint(x: 0.5, y: 1)
+        crossFade.colors = colors(before: yOverflow && viewport.minY > document.minY, after: yOverflow && viewport.maxY < document.maxY)
+        crossFade.locations = locations(viewport.height)
+        fade.mask = crossFade; layer.mask = fade
         CATransaction.commit()
     }
     func dispose() { if let observation { NotificationCenter.default.removeObserver(observation) }; observation = nil; contentView.layer?.mask = nil }

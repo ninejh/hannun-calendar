@@ -310,6 +310,10 @@ import AppKit
 }
 
 /// Nonmodal editor drawn with the same kit surface; only text and date are native controls.
+@MainActor private final class PanelEditingWindow: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 @MainActor final class PanelEditingForm: PanelContainerView, NSTextFieldDelegate {
     let context: BoardScreenContext
     let formID: String
@@ -327,6 +331,11 @@ import AppKit
     var noticeKey: String?
     var errorKey: String?
     private weak var previousResponder: NSResponder?
+    private var formViewport: OverflowScrollView?
+    private var floatingWindow: PanelEditingWindow?
+    private weak var sourceView: NSView?
+    private var windowObservations: [NSObjectProtocol] = []
+    private var positioning = false
     init(context: BoardScreenContext, id: String, titleKey: String, fields definitions: [(String, String, String)], day: DateOnly? = nil) {
         self.context = context; formID = id; self.titleKey = titleKey
         super.init(focus: context.focus)
@@ -350,42 +359,123 @@ import AppKit
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+    private func noticeHeight(width: CGFloat) -> CGFloat {
+        guard let key = errorKey ?? noticeKey else { return 0 }
+        let attributes = NativeFont.attributes(font: NativeFont.body, color: .labelColor, truncation: .byWordWrapping)
+        let text = context.text(key) as NSString
+        let height = text.boundingRect(with: CGSize(width: max(1, width - NativeSpace.sm * 2), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height
+        return max(NativeSize.compactTarget, ceil(height) + NativeSpace.sm)
+    }
     var preferredSize: CGSize {
-        CGSize(width: NativeSize.popoverWidth,
+        func textWidth(_ value: String) -> CGFloat {
+            ceil((value as NSString).size(withAttributes: [.font: NativeFont.primary]).width) + NativeSpace.lg
+        }
+        let labelWidth = labels.map { textWidth(context.text($0.1)) / 0.4 }.max() ?? 0
+        let valueWidth = fields.values.map { textWidth($0.stringValue) / 0.6 }.max() ?? 0
+        let titleWidth = textWidth(context.text(titleKey))
+        let available = sourceView?.window?.screen?.visibleFrame.width ?? NSScreen.main?.visibleFrame.width ?? NativeSize.popoverWidth
+        let width = min(max(NativeSize.popoverWidth, max(labelWidth, valueWidth, titleWidth) + NativeSpace.xxl),
+                        max(NativeSize.popoverWidth, available - NativeSpace.sm * 2))
+        return CGSize(width: width,
                height: NativeSize.toolbarHeight + NativeSpace.md +
                 (NativeSize.toolbarHeight + NativeSpace.xs) * CGFloat(labels.count) +
                 (datePicker == nil ? 0 : NativeSize.toolbarHeight * 2 + NativeSpace.xs) +
-                NativeSize.toolbarHeight * 3 + NativeSpace.xxl)
+                noticeHeight(width: width - NativeSpace.xxl) + NativeSpace.xs +
+                NativeSize.toolbarHeight + NativeSpace.md)
+    }
+    override func paint(_ item: NativeRenderItem) {
+        guard item.id == formID + ".notice" else { super.paint(item); return }
+        let rect = item.rect.insetBy(dx: NativeSpace.sm, dy: NativeSpace.xxs)
+        (item.label as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: NativeFont.attributes(font: NativeFont.body, color: theme.color(item.color), truncation: .byWordWrapping))
     }
     func present(from source: NSView) {
         previousResponder = source.window?.firstResponder
+        sourceView = source
         let host = source.window?.contentView ?? source
         let anchor = host.convert(source.bounds, from: source)
-        frame = NativeGeometry.clamp(CGRect(origin: CGPoint(x: anchor.minX, y: anchor.minY), size: preferredSize), to: host.bounds.insetBy(dx: NativeSpace.sm, dy: NativeSpace.sm))
-        host.addSubview(self); layoutSubtreeIfNeeded()
+        let viewport = OverflowScrollView(frame: .zero)
+        viewport.allowsBothAxes = true
+        viewport.documentView = self; formViewport = viewport
+        frame = CGRect(origin: .zero, size: preferredSize)
+        if let parent = source.window, parent.isVisible {
+            let floating = PanelEditingWindow(contentRect: CGRect(origin: .zero, size: preferredSize), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            floating.isReleasedWhenClosed = false; floating.isOpaque = false; floating.backgroundColor = .clear
+            floating.level = parent.level; floating.hasShadow = false; floating.contentView = viewport; floatingWindow = floating
+            parent.addChildWindow(floating, ordered: .above)
+            for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification] {
+                windowObservations.append(NotificationCenter.default.addObserver(forName: name, object: parent, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.positionFloatingWindow() }
+                })
+            }
+            positionFloatingWindow(); floating.orderFront(nil); floating.makeKey()
+        } else {
+            viewport.frame = NativeGeometry.clamp(CGRect(origin: CGPoint(x: anchor.minX, y: anchor.minY), size: preferredSize), to: host.bounds.insetBy(dx: NativeSpace.sm, dy: NativeSpace.sm))
+            host.addSubview(viewport)
+        }
+        viewport.layoutSubtreeIfNeeded(); layoutSubtreeIfNeeded()
+        viewport.updateFade()
         isHidden = false
         let first = labels.first?.0 ?? ""
         window?.makeFirstResponder(fields[first])
         if let selection = selections[first], let editor = fields[first]?.currentEditor() as? NSTextView { editor.setSelectedRange(selection) }
         layer.map { NativeMotion.apply(.popover, to: $0, reduceMotion: context.presentation.state.snapshot.environment.reduceMotion) }
     }
+    private func positionFloatingWindow() {
+        guard !positioning, let floating = floatingWindow, let source = sourceView, let parent = source.window else { return }
+        positioning = true; defer { positioning = false }
+        let anchor = parent.convertToScreen(source.convert(source.bounds, to: nil))
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(anchor) }) ?? parent.screen else { return }
+        let visible = screen.visibleFrame.insetBy(dx: NativeSpace.sm, dy: NativeSpace.sm)
+        let size = CGSize(width: min(preferredSize.width, visible.width), height: min(preferredSize.height, visible.height))
+        let desired = CGRect(x: anchor.minX, y: anchor.minY - size.height - NativeSpace.sm, width: size.width, height: size.height)
+        let fitted = NativeGeometry.clamp(desired, to: visible)
+        if floating.frame != fitted { floating.setFrame(fitted, display: false) }
+        if frame.size != preferredSize { frame.size = preferredSize }
+        formViewport?.updateFade()
+    }
+    private func removeViewport() {
+        for observation in windowObservations { NotificationCenter.default.removeObserver(observation) }; windowObservations.removeAll()
+        if let viewport = formViewport { viewport.documentView = nil; viewport.dispose(); viewport.removeFromSuperview(); formViewport = nil }
+        if let floating = floatingWindow {
+            floating.parent?.removeChildWindow(floating); floating.orderOut(nil); floating.contentView = nil; floating.close(); floatingWindow = nil
+        }
+        sourceView = nil
+    }
+    override func viewDidHide() {
+        super.viewDidHide(); floatingWindow?.orderOut(nil)
+    }
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        if sourceView?.window?.isVisible == true { positionFloatingWindow(); floatingWindow?.orderFront(nil) }
+    }
     func dismiss() {
         guard !fields.values.contains(where: { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }) else { return }
         for (key, field) in fields {
             if let text = field.currentEditor() as? NSTextView { selections[key] = text.selectedRange() }
         }
-        let responder = previousResponder; isHidden = true; layer.map { NativeMotion.stop($0) }; removeFromSuperview()
+        let responder = previousResponder; isHidden = true; layer.map { NativeMotion.stop($0) }
+        removeViewport()
+        removeFromSuperview()
         if let responder { responderWindow(responder)?.makeFirstResponder(responder) }
         retainedMenu?.dispose(); retainedMenu = nil
     }
     override func dispose() {
         fields.values.forEach { $0.delegate = nil }
         onSave = nil; onClose = nil; onChange = nil; retainedMenu?.dispose(); retainedMenu = nil
-        layer.map { NativeMotion.stop($0) }; removeFromSuperview(); super.dispose()
+        layer.map { NativeMotion.stop($0) }
+        removeViewport()
+        removeFromSuperview(); super.dispose()
     }
     private func responderWindow(_ responder: NSResponder) -> NSWindow? { (responder as? NSView)?.window }
     override func layout() { super.layout(); refresh() }
     func refresh() {
+        if floatingWindow != nil { positionFloatingWindow() }
+        else if let viewport = formViewport, let host = viewport.superview {
+            let fitted = NativeGeometry.clamp(CGRect(origin: viewport.frame.origin, size: preferredSize), to: host.bounds.insetBy(dx: NativeSpace.sm, dy: NativeSpace.sm))
+            if fitted != viewport.frame { viewport.frame = fitted }
+            if frame.size != preferredSize { frame.size = preferredSize }
+            viewport.updateFade()
+        }
         let resolved = context.presentation.state.snapshot.environment.resolvedAppearance
         if theme.appearance != resolved { theme = NativeTheme(appearance: resolved) }
         let nativeAppearance: NSAppearance.Name = resolved == .dark ? .darkAqua : .aqua
@@ -406,12 +496,12 @@ import AppKit
             datePicker.frame = CGRect(x: NativeSpace.md + width * 0.4, y: y, width: width * 0.6, height: NativeSize.compactTarget)
             items.append(NativeRenderItem(id: formID + ".label.date", rect: CGRect(x: NativeSpace.md, y: y, width: width * 0.4, height: NativeSize.toolbarHeight), label: context.text("sub.field_next_date"), kind: .text))
             y += NativeSize.toolbarHeight + NativeSpace.xs
-            items.append(NativeRenderItem(id: formID + ".cycle", rect: CGRect(x: NativeSpace.md, y: y, width: width * 0.6, height: NativeSize.compactTarget), label: context.text("sub.field_cycle") + ": " + context.text("sub.cycle_" + cycle.rawValue), kind: .button))
-            items.append(NativeRenderItem(id: formID + ".currency", rect: CGRect(x: NativeSpace.md + width * 0.6, y: y, width: width * 0.4, height: NativeSize.compactTarget), label: context.text("sub.field_currency") + ": " + currency, kind: .button))
+            items.append(NativeRenderItem(id: formID + ".cycle", rect: CGRect(x: NativeSpace.md, y: y, width: width * 0.6, height: NativeSize.compactTarget), label: context.text("sub.field_cycle") + ": " + context.text("sub.cycle_" + cycle.rawValue), kind: .menuButton))
+            items.append(NativeRenderItem(id: formID + ".currency", rect: CGRect(x: NativeSpace.md + width * 0.6, y: y, width: width * 0.4, height: NativeSize.compactTarget), label: context.text("sub.field_currency") + ": " + currency, kind: .menuButton))
             y += NativeSize.toolbarHeight
         }
         if let key = errorKey ?? noticeKey {
-            items.append(NativeRenderItem(id: formID + ".notice", rect: CGRect(x: NativeSpace.md, y: y, width: width, height: NativeSize.toolbarHeight * 2), label: context.text(key), kind: .text, color: .textQuiet))
+            items.append(NativeRenderItem(id: formID + ".notice", rect: CGRect(x: NativeSpace.md, y: y, width: width, height: noticeHeight(width: width)), label: context.text(key), kind: .text, color: .textQuiet))
         }
         let actionY = bounds.height - NativeSize.toolbarHeight - NativeSpace.md
         items.append(NativeRenderItem(id: formID + ".save", rect: CGRect(x: NativeSpace.md, y: actionY, width: width / 2 - NativeSpace.xs, height: NativeSize.toolbarHeight), label: context.text("event.save"), kind: .button, fill: .fill, color: .toastText))
@@ -421,6 +511,13 @@ import AppKit
     func save() {
         guard !fields.values.contains(where: { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }) else { return }
         onChange?(); onSave?()
+    }
+    override func showMenu(for id: String) -> Bool {
+        guard (id == formID + ".cycle" || id == formID + ".currency"), window != nil,
+              items.contains(where: { $0.id == id && $0.enabled && $0.isInteractive }),
+              !fields.values.contains(where: { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }) else { return false }
+        activateForm(id)
+        return true
     }
     private func activateForm(_ id: String) {
         if id == formID + ".save" { save() }
@@ -438,7 +535,11 @@ import AppKit
         }
     }
     @objc private func dateChanged() { onChange?() }
-    func controlTextDidChange(_ notification: Notification) { onChange?() }
+    func controlTextDidChange(_ notification: Notification) {
+        onChange?()
+        if !fields.values.contains(where: { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }) { refresh() }
+    }
+    func controlTextDidEndEditing(_ notification: Notification) { refresh() }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.cancelOperation(_:)) { guard !textView.hasMarkedText() else { return false }; onClose?(); return true }
         if selector == #selector(NSResponder.insertNewline(_:)) { guard !textView.hasMarkedText() else { return false }; save(); return true }

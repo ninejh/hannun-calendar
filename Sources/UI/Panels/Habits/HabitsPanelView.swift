@@ -38,6 +38,7 @@ import AppKit
         updateHeader([NativeRenderItem(id: "habits.title", rect: titleRect, label: context.text(titleKey), kind: .text)] + addItems() + statusItems())
         if isCompactStep { layoutCompactContent(); return }
         let wide = variant == .wide
+        scroll.allowsBothAxes = false
         let axis: NativeAxis = wide ? .horizontal : .vertical
         if scroll.axis != axis { scroll.axis = axis }
         scroll.hasVerticalScroller = !wide
@@ -73,6 +74,7 @@ import AppKit
     }
     private func layoutCompactContent() {
         let wide = variant == .wide
+        scroll.allowsBothAxes = wide
         let axis: NativeAxis = wide ? .horizontal : .vertical
         if scroll.axis != axis { scroll.axis = axis }
         let cardWidth = wide ? (stepMetrics.minimumCardWidth ?? NativeSize.projectMinWidth) : scroll.contentSize.width
@@ -113,9 +115,18 @@ import AppKit
         var height = NativeSpace.xs + (wide ? cardHeight : CGFloat(values.count) * (cardHeight + gap))
         let status = contentStatusItems(at: height); items += status
         height = max(height, status.map(\.rect.maxY).max() ?? height)
-        scroll.hasVerticalScroller = !wide || height > scroll.contentSize.height
+        // Card padding alone should not make an otherwise visible control fade.
+        // Include interactive hit targets and their focus rings when deciding
+        // whether there is real content below the viewport.
+        let focusOutset = NativeSize.focusOffset + NativeSize.focusWidth / 2
+        let contentBottom = items.reduce(CGFloat.zero) { bottom, item in
+            max(bottom, item.isInteractive ? max(item.rect.maxY, item.hitRect.maxY + focusOutset) : item.rect.maxY)
+        }
+        let viewportHeight = scroll.contentSize.height
+        let verticalOverflow = contentBottom > viewportHeight
+        scroll.hasVerticalScroller = !wide || verticalOverflow
         contentCanvas.frame.size = CGSize(width: wide ? max(scroll.contentSize.width, CGFloat(values.count) * (cardWidth + gap)) : scroll.contentSize.width,
-            height: max(scroll.contentSize.height, height + NativeSpace.xs))
+            height: verticalOverflow ? max(viewportHeight, height + NativeSpace.xs, contentBottom) : viewportHeight)
         contentCanvas.update(items: items)
     }
 }

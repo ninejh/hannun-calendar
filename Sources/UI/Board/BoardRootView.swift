@@ -22,7 +22,7 @@ import AppKit
     let context: BoardScreenContext
     let editorHost: BoardEditorHost
     private let routingProxy: WeakBoardRoutingProxy
-    private let viewport = NSScrollView()
+    private let viewport = OverflowScrollView()
     private var observedViewportBounds: CGRect?
     private let parking = NSView()
     private let feedback: NativeCanvasView
@@ -116,7 +116,7 @@ import AppKit
         lastInteractionState = InteractionState(context.presentation.state)
         identifier = NSUserInterfaceItemIdentifier("board.root"); setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityIdentifier("board.root"); setAccessibilityLabel("Hannun Calendar")
         proxy.target = self; context.kit.panelMenus.target = self
-        viewport.drawsBackground = false; viewport.verticalScrollElasticity = .none; viewport.horizontalScrollElasticity = .none; viewport.hasHorizontalScroller = true; viewport.hasVerticalScroller = true; viewport.autohidesScrollers = true; viewport.scrollerStyle = .overlay
+        viewport.allowsBothAxes = true; viewport.drawsBackground = false; viewport.verticalScrollElasticity = .none; viewport.horizontalScrollElasticity = .none; viewport.hasHorizontalScroller = true; viewport.hasVerticalScroller = true; viewport.autohidesScrollers = true; viewport.scrollerStyle = .overlay
         viewport.documentView = workspace; addSubview(viewport); gridDots.isHidden = true; workspace.addSubview(gridDots); workspace.addSubview(calendarView)
         parking.isHidden = true; workspace.addSubview(parking)
         for slot in SlotID.allCases {
@@ -311,6 +311,7 @@ import AppKit
         let motion: NativeMotionKind? = before.map { $0.slots != current.slots ? (rollbackSlots ? .rollback : .swap) : nil } ?? nil
         geometry = next
         workspace.frame = CGRect(origin: .zero, size: geometry.contentSize)
+        viewport.updateFade()
         calendarView.boardViewportWidth = bounds.width; calendarView.frame = geometry.calendar; calendarView.needsLayout = true
         let visiblePanels = Set(geometry.slots.keys.compactMap { current.slots[$0.rawValue] })
         for (panel, controller) in controllers where !visiblePanels.contains(panel) {
@@ -890,7 +891,18 @@ import AppKit
             case "k": route(.openSearch(initialQuery: "", anchor: nil)); return true
             case "n": route(.openAdd(AddRequest(kind: .event, day: context.presentation.state.view.selectedDay))); return true
             case "z":
-                if let text = window?.firstResponder as? NSTextView, text.undoManager?.canUndo == true { return false }
+                guard event.modifierFlags.intersection([.option, .control]).isEmpty,
+                      let boardWindow = window, boardWindow.isVisible, let eventWindow = event.window,
+                      eventWindow === boardWindow || eventWindow.parent === boardWindow else { return false }
+                let keyWindow = NSApp.keyWindow
+                if let keyWindow, keyWindow !== boardWindow && keyWindow.parent !== boardWindow { return false }
+                let child = (keyWindow?.parent === boardWindow && keyWindow?.isVisible == true ? keyWindow : nil) ??
+                    (eventWindow.parent === boardWindow && eventWindow.isVisible ? eventWindow : nil)
+                if eventWindow.parent === boardWindow && !eventWindow.isVisible { return true }
+                let inputWindow = child ?? boardWindow
+                if let text = inputWindow.firstResponder as? NSTextView { return text.hasMarkedText() }
+                if child != nil || (keyWindow == nil && boardWindow.childWindows?.contains(where: { $0.isVisible }) == true) { return true }
+                if event.modifierFlags.contains(.shift) { return false }
                 context.presentation.send(.undo); return true
             default: return false
             }
@@ -968,6 +980,7 @@ import AppKit
     }
     private var composingEditor: NSTextView? {
         if let editor = window?.firstResponder as? NSTextView, editor.hasMarkedText() { return editor }
+        if let editor = window?.childWindows?.compactMap({ $0.firstResponder as? NSTextView }).first(where: { $0.hasMarkedText() }) { return editor }
         return editorHost.textView.hasMarkedText() ? editorHost.textView : nil
     }
     private func scheduleDeferredOverlayAction() {
@@ -1029,6 +1042,7 @@ import AppKit
         if activeOverlay != nil, composingEditor != nil, activeRoute != request { deferredOverlayAction = .present(kind, request); return }
         if activeOverlay?.kind != kind { dismissOverlay(); activeOverlay = overlayFactory(kind, context) }
         guard let overlay = activeOverlay else { return }
+        overlay.view.identifier = NSUserInterfaceItemIdentifier("board.overlay.screen")
         if overlay.view.superview !== self { addSubview(overlay.view) }
         overlay.view.frame = bounds; activeRoute = request; overlay.present(resolved(request))
     }
@@ -1055,9 +1069,10 @@ import AppKit
         }
         let previous = activeOverlay, anchor = activeRoute.flatMap(Self.anchor)
         activeOverlay = nil; activeRoute = nil
-        let first = window?.firstResponder as? NSView
+        let overlayWindow = window?.childWindows?.first { $0.identifier?.rawValue == "board.overlay.window" }
+        let first = (overlayWindow?.firstResponder as? NSView) ?? (window?.firstResponder as? NSView)
         let fieldOwner = (first as? NSTextView)?.delegate as? NSView
-        let wasOverlayEditor = previous.map { fieldOwner?.isDescendant(of: $0.view) == true } ?? false
+        let wasOverlayEditor = overlayWindow?.firstResponder != nil || (previous.map { fieldOwner?.isDescendant(of: $0.view) == true } ?? false)
         let shouldRestore = first == nil || first === workspace || first === calendarView || wasOverlayEditor || (previous.map { first?.isDescendant(of: $0.view) == true } ?? false)
         previous?.dismiss(); previous?.dispose(); previous?.view.removeFromSuperview()
         if restoreFocus, shouldRestore, let id = anchor?.returnFocusID { window?.makeFirstResponder(workspace); context.focus.focus(id) }
@@ -1224,7 +1239,7 @@ import AppKit
         for controller in controllers.values { if let layer = controller.view.layer { NativeMotion.stop(layer) }; controller.dispose(); controller.view.removeFromSuperview() }; controllers = [:]
         for host in slotHosts.values { host.dispose() }; slotHosts = [:]
         for menu in menus.values { menu.dispose() }; menus = [:]
-        editorHost.dispose(); context.editing.dispose(); viewport.documentView = nil
+        editorHost.dispose(); context.editing.dispose(); viewport.dispose(); viewport.documentView = nil
     }
     private static func panelKey(_ panel: PanelID) -> String {
         switch panel { case .todos: "slot_menu.item_todo"; case .worldClock: "slot_menu.item_world_clock"; case .focusTimer: "slot_menu.item_focus_timer"; default: "slot_menu.item_\(panel.rawValue)" }

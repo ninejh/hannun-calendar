@@ -46,12 +46,18 @@ import AppKit
         let result = super.hitTest(point); return result === self ? nil : result
     }
 }
+@MainActor private final class OverlayFloatingPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
 
 /// Only the root mounts this controller. No calendar/store/OS adapter is constructed here.
 @MainActor final class NativeOverlayController: NSObject, OverlayController, NSTextFieldDelegate, NSTextViewDelegate {
     let context: BoardScreenContext
     private(set) var route: OverlayRoute
     private let host = OverlayHostView(frame: .zero)
+    private let floatingHost = OverlayHostView(frame: .zero)
+    private var floatingWindow: OverlayFloatingPanel?
+    private var floatingObservations: [NSObjectProtocol] = []
     private let shadowHost = NSView(frame: .zero)
     private let shadow = NativeSurfaceShadow()
     var view: NSView { host }
@@ -65,6 +71,7 @@ import AppKit
     private(set) var datePickers: [String: NativeDatePicker] = [:]
     private let notes = NSTextView(frame: .zero)
     private let notesScroll = OverflowScrollView(frame: .zero)
+    private var usedNotes = false
     private(set) var moreDetails = false
     private(set) var inlineMessage: String? {
         didSet { presentationOwnsInlineFailure = false }
@@ -104,6 +111,8 @@ import AppKit
     private var renderItems: [NativeRenderItem] = []
     private var y: CGFloat = 0
     private var bodyWidth: CGFloat = 0
+    private var measuredHeight: CGFloat?
+    private var measuredWidth: CGFloat?
     private var layingOut = false
     private var focusOrder: [FocusID] = []
     private let spinner = CAShapeLayer()
@@ -126,7 +135,7 @@ import AppKit
         shadowHost.wantsLayer = true; shadowHost.clipsToBounds = false
         shadowHost.layerContentsRedrawPolicy = .never; shadowHost.layer?.masksToBounds = false
         shadowHost.setAccessibilityElement(false)
-        host.addSubview(shadowHost); host.addSubview(surface); surface.addSubview(scroll); scroll.documentView = content
+        host.addSubview(shadowHost); host.addSubview(surface); surface.addSubview(scroll); scroll.allowsBothAxes = true; scroll.documentView = content
         surface.wantsLayer = true; surface.layer?.cornerRadius = NativeRadius.popover; surface.layer?.cornerCurve = .continuous
         spinner.fillColor = nil; spinner.lineWidth = NativeSize.focusWidth; spinner.isHidden = true; surface.layer?.addSublayer(spinner)
         host.onLayout = { [weak self] in guard let self else { return }; self.layout(in: self.host.bounds) }
@@ -206,7 +215,7 @@ import AppKit
         let replacesContent = !sameContent(request, presentedRoute)
         if replacesContent, presentedRoute != nil {
             closeChoices(restoreFocus: false)
-            saveDraft(); host.window?.makeFirstResponder(content)
+            saveDraft(); surface.window?.makeFirstResponder(content)
             for input in textFields.values { input.stringValue = "" }
             datePickers.values.forEach { $0.removeFromSuperview() }; datePickers = [:]
             inlineMessage = nil; moreDetails = false; quickID = UUID(); draftCommitted = false
@@ -247,6 +256,12 @@ import AppKit
         if let focus = incomingAnchor?.returnFocusID { returningFocus = focus }
         let nextAnchor = incomingAnchor?.boardRect
         if anchor != nextAnchor { anchor = nextAnchor; placed = false }
+        prepareFloatingHost()
+        if let panel = floatingWindow, !panel.isVisible, let parent = host.window, parent.isVisible {
+            let shouldMakeKey = NSApp.isActive && parent.isKeyWindow
+            panel.orderFront(nil)
+            if shouldMakeKey { panel.makeKey() }
+        }
         layout(in: host.bounds)
         if firstPresentation {
             focusInitialInput()
@@ -306,31 +321,73 @@ import AppKit
         }
     }
     var preferredSize: CGSize {
-        switch route {
+        let initial: CGSize = switch route {
         case .settings: CGSize(width: NativeSize.searchWidth, height: NativeSize.agendaMaxHeight * 2)
         case .search: CGSize(width: NativeSize.searchWidth, height: NativeSize.agendaMaxHeight + NativeSpace.xxl * 2)
         case .monthPicker: CGSize(width: NativeSize.monthPickerWidth, height: NativeSize.compactTarget * 6 + NativeSpace.xxl * 2)
         case .event, .newEvent: CGSize(width: route == .newEvent ? NativeSize.searchWidth : NativeSize.popoverWidth, height: NativeSize.agendaMaxHeight + NativeSpace.xxl * (moreDetails ? 12 : 7))
         default: CGSize(width: NativeSize.popoverWidth, height: NativeSize.agendaMaxHeight + NativeSpace.xxl * 2)
         }
+        return CGSize(width: max(initial.width, measuredWidth ?? 0), height: measuredHeight ?? initial.height)
     }
     func layout(in bounds: CGRect) {
         guard !disposed, !layingOut, bounds.width > 0, bounds.height > 0 else { return }
         layingOut = true; defer { layingOut = false }
+        if floatingWindow != nil {
+            for _ in 0..<3 { layoutFloating(); render() }
+            return
+        }
         surface.frame = OverlayPlacement.frame(size: preferredSize, anchor: anchor, within: bounds, previousOrigin: placed ? surface.frame.origin : nil)
         placed = true
         let inset = NativeSpace.lg, header = NativeSize.compactTarget + NativeSpace.sm * 2
         scroll.frame = CGRect(x: inset, y: header, width: max(0, surface.bounds.width - inset * 2), height: max(0, surface.bounds.height - header - inset))
         render()
+        for _ in 0..<2 {
+            let fitted = OverlayPlacement.frame(size: preferredSize, anchor: anchor, within: bounds, previousOrigin: surface.frame.origin)
+            if fitted == surface.frame { break }
+            surface.frame = fitted; render()
+        }
+    }
+    private func prepareFloatingHost() {
+        guard floatingWindow == nil, host.identifier?.rawValue == "board.overlay.screen", let parent = host.window, parent.isVisible else { return }
+        let shouldMakeKey = NSApp.isActive && parent.isKeyWindow
+        let panel = OverlayFloatingPanel(contentRect: CGRect(origin: .zero, size: preferredSize), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.identifier = NSUserInterfaceItemIdentifier("board.overlay.window")
+        panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false; panel.level = parent.level
+        shadowHost.removeFromSuperview(); surface.removeFromSuperview()
+        floatingHost.addSubview(shadowHost); floatingHost.addSubview(surface); panel.contentView = floatingHost; floatingWindow = panel
+        parent.addChildWindow(panel, ordered: .above)
+        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification] {
+            floatingObservations.append(NotificationCenter.default.addObserver(forName: name, object: parent, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { guard let self else { return }; self.placed = false; self.layout(in: self.host.bounds) }
+            })
+        }
+        panel.orderFront(nil)
+        if shouldMakeKey { panel.makeKey() }
+    }
+    private func layoutFloating() {
+        guard let panel = floatingWindow, let parent = host.window else { return }
+        let anchorScreen = anchor.map { parent.convertToScreen(host.convert($0, to: nil)) }
+        guard let screen = anchorScreen.flatMap({ point in NSScreen.screens.first { $0.frame.intersects(point) } }) ?? parent.screen else { return }
+        let visible = screen.visibleFrame.insetBy(dx: NativeSpace.sm, dy: NativeSpace.sm)
+        let padding = NativeSpace.xxl
+        let size = CGSize(width: min(visible.width, preferredSize.width + padding * 2), height: min(visible.height, preferredSize.height + padding * 2))
+        let origin = anchorScreen.map { CGPoint(x: $0.minX, y: $0.minY - size.height - NativeSpace.sm) }
+            ?? CGPoint(x: parent.frame.midX - size.width / 2, y: parent.frame.midY - size.height / 2)
+        let frame = NativeGeometry.clamp(CGRect(origin: origin, size: size), to: visible)
+        if panel.frame != frame { panel.setFrame(frame, display: false) }
+        floatingHost.frame.size = frame.size
+        surface.frame = CGRect(x: padding, y: padding, width: max(0, frame.width - padding * 2), height: max(0, frame.height - padding * 2))
+        placed = true
     }
     func reanchor(_ rect: CGRect?) { anchor = rect; placed = false; layout(in: host.bounds) }
     func focusInitialInput() {
         if let field = textFields[route == .search ? "search" : "title"] {
-            host.window?.makeFirstResponder(field)
+            surface.window?.makeFirstResponder(field)
             if quickKind == "todo", let selection = todoEditor?.title.selection, let native = field.currentEditor() as? NSTextView {
                 native.setSelectedRange(NSIntersectionRange(selection, NSRange(location: 0, length: native.string.utf16.count)))
             }
-        } else { host.window?.makeFirstResponder(content); context.focus.focus(FocusID("overlay.close")) }
+        } else { surface.window?.makeFirstResponder(content); context.focus.focus(FocusID("overlay.close")) }
     }
     private var state: PresentationState { context.presentation.state }
     private func text(_ key: String, _ values: [String: String] = [:]) -> String { context.text(key, values: values) }
@@ -351,26 +408,33 @@ import AppKit
         let measured = ceil((heading as NSString).boundingRect(with: CGSize(width: max(1, headingWidth - NativeSpace.xs * 2), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height) + NativeSpace.xs * 2
         let headingHeight = isAgenda ? max(NativeSize.compactTarget, measured) : NativeSize.compactTarget
         var headerItems = [NativeRenderItem(id: "overlay.heading", rect: CGRect(x: NativeSpace.lg, y: NativeSpace.sm, width: headingWidth, height: headingHeight), label: heading, kind: .text, value: isAgenda ? "wrapped-date" : nil),
-                           NativeRenderItem(id: "overlay.close", rect: CGRect(x: surface.bounds.width - NativeSize.compactTarget - NativeSpace.sm, y: NativeSpace.sm, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: text("event.cancel"), kind: .button)]
+                           NativeRenderItem(id: "overlay.close", rect: CGRect(x: surface.bounds.width - NativeSize.compactTarget - NativeSpace.sm, y: NativeSpace.sm, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: text("a11y.close"), kind: .button)]
         var headerHeight = headingHeight + NativeSpace.sm * 2
+        var bodyError: String?
+        let hasFixedCancel: Bool = if case .event = route { editor != nil && deleteStage == nil } else { false }
+        let footerHeight = NativeSize.compactTarget + NativeSpace.xs
         if let inlineMessage {
             let width = max(0, surface.bounds.width - NativeSpace.lg * 2)
             let attributes = NativeFont.attributes(font: NativeFont.body, color: theme.color(.danger), truncation: .byWordWrapping)
             let height = max(NativeSize.compactTarget, (inlineMessage as NSString).boundingRect(with: CGSize(width: max(1, width - NativeSpace.lg), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height + NativeSpace.sm)
-            headerItems.append(NativeRenderItem(id: "overlay.error", rect: CGRect(x: NativeSpace.lg, y: headerHeight, width: width, height: height), label: inlineMessage, kind: .text, color: .danger))
-            headerHeight += height + NativeSpace.xs
+            let reserve = NativeSize.compactTarget + NativeSpace.lg + (hasFixedCancel ? footerHeight : 0)
+            if headerHeight + height + NativeSpace.xs + reserve <= surface.bounds.height {
+                headerItems.append(NativeRenderItem(id: "overlay.error", rect: CGRect(x: NativeSpace.lg, y: headerHeight, width: width, height: height), label: inlineMessage, kind: .text, color: .danger))
+                headerHeight += height + NativeSpace.xs
+            } else { bodyError = inlineMessage }
         }
-        let fixedCancel: Bool = if case .event = route { editor != nil && deleteStage == nil } else { false }
-        let footerHeight = NativeSize.compactTarget + NativeSpace.xs
+        let fixedCancel = hasFixedCancel && surface.bounds.height >= headerHeight + footerHeight + NativeSize.compactTarget + NativeSpace.lg
         let footerY = max(headerHeight, surface.bounds.height - NativeSpace.lg - footerHeight)
         if fixedCancel {
-            headerItems.append(NativeRenderItem(id: "overlay.cancel", rect: CGRect(x: NativeSpace.lg, y: footerY, width: max(0, surface.bounds.width - NativeSpace.lg * 2), height: footerHeight), label: text("event.cancel"), kind: .button))
+            headerItems.append(NativeRenderItem(id: "overlay.cancel", rect: CGRect(x: NativeSpace.lg, y: footerY, width: max(0, surface.bounds.width - NativeSpace.lg * 2), height: footerHeight), label: text("event.discard_changes"), kind: .button))
         }
         surface.update(items: headerItems)
         let scrollBottom = fixedCancel ? footerY : surface.bounds.height - NativeSpace.lg
         scroll.frame = CGRect(x: NativeSpace.lg, y: headerHeight, width: max(0, surface.bounds.width - NativeSpace.lg * 2), height: max(0, scrollBottom - headerHeight))
-        renderItems = []; itemActions = [:]; usedFields = []; usedDates = []; y = 0; bodyWidth = scroll.contentSize.width
-        notesScroll.isHidden = true
+        renderItems = []; itemActions = [:]; usedFields = []; usedDates = []; y = 0
+        bodyWidth = max(scroll.contentSize.width, NativeSize.monthPickerWidth - NativeSpace.lg * 2)
+        usedNotes = false
+        if let bodyError { paragraph("overlay.error", bodyError, color: .danger) }
         switch route {
         case .event, .newEvent: if quickKind == "todo" { renderTodo() } else { renderEvent() }
         case .search: renderSearch()
@@ -379,14 +443,33 @@ import AppKit
         case .calendars: renderCalendars()
         case .agenda(let day, _): renderAgenda(day)
         }
+        if notesScroll.isHidden == usedNotes { notesScroll.isHidden = !usedNotes }
+        if hasFixedCancel && !fixedCancel { row("overlay.cancel", label: text("event.discard_changes")) }
         for (id, field) in textFields { field.isHidden = !usedFields.contains(id); field.textColor = theme.color(.textPrimary); field.backgroundColor = theme.color(.raised) }
         for (id, picker) in datePickers { picker.isHidden = !usedDates.contains(id) }
         content.frame = CGRect(x: 0, y: 0, width: bodyWidth, height: max(y, scroll.contentSize.height))
         content.update(items: renderItems); scroll.updateFade(); registerNativeFocus()
+        let requiredHeight = ceil(headerHeight + y + NativeSpace.lg + (fixedCancel ? footerHeight : 0))
+        measuredHeight = requiredHeight
+        let naturalWidth = (headerItems + renderItems).map { item -> CGFloat in
+            let font = item.kind == .text ? NativeFont.body : NativeFont.primary
+            return ceil((item.label as NSString).size(withAttributes: [.font: font]).width) + NativeSpace.lg * 4
+        }.max() ?? 0
+        let inputWidth = textFields.filter { usedFields.contains($0.key) }.values.map {
+            ceil(($0.stringValue as NSString).size(withAttributes: [.font: NativeFont.body]).width) + NativeSpace.lg * 4
+        }.max() ?? 0
+        measuredWidth = max(naturalWidth, inputWidth)
+        if !layingOut, host.bounds.width > 0, host.bounds.height > 0 {
+            if floatingWindow != nil { layout(in: host.bounds) }
+            else {
+                let fitted = OverlayPlacement.frame(size: preferredSize, anchor: anchor, within: host.bounds, previousOrigin: surface.frame.origin)
+                if fitted != surface.frame { layout(in: host.bounds) }
+            }
+        }
         let isRefreshing = connecting || state.activity.refreshing
         if connectionReturnFocus, !isRefreshing, !state.activity.loading {
             connectionReturnFocus = false
-            if context.focus.focusedID == nil, host.window?.firstResponder === content {
+            if context.focus.focusedID == nil, surface.window?.firstResponder === content {
                 let authorization = state.snapshot.calendarAuthorization
                 let recoveryID = authorization == .denied || authorization == .restricted ? "overlay.privacy" : "overlay.refresh"
                 context.focus.focus(FocusID(recoveryID))
@@ -465,7 +548,7 @@ import AppKit
     }
     private func renderTodo() {
         guard let todo = todoEditor else { return }
-        if todo.original == nil { row("overlay.kind", label: text("quick.kind") + ": " + text("quick.kind_todo"), enabled: !busy) }
+        if todo.original == nil { row("overlay.kind", label: text("quick.kind") + ": " + text("quick.kind_todo"), kind: .menuButton, enabled: !busy) }
         field("title", key: "todo.add_placeholder", value: todo.title.text, enabled: !busy)
         row("overlay.todo.date", label: text("todo.date_enabled"), kind: .checkBox, enabled: !busy, checked: todo.hasDueDate)
         if todo.hasDueDate {
@@ -478,8 +561,8 @@ import AppKit
         }
         let project = todo.projectID.flatMap { id in state.snapshot.board.projects.first { $0.id == id } }
         let projectName = project?.title ?? (todo.projectID == nil ? text("event.project_none") : text("todo.project_missing"))
-        row("overlay.todo.project", label: text("todo.field_project") + ": " + projectName, enabled: !busy)
-        row("overlay.todo.repeat", label: text("todo.repeat") + ": " + text("event.repeat_" + (todo.frequency?.rawValue ?? "none")), enabled: !busy)
+        row("overlay.todo.project", label: text("todo.field_project") + ": " + projectName, kind: .menuButton, enabled: !busy)
+        row("overlay.todo.repeat", label: text("todo.repeat") + ": " + text("event.repeat_" + (todo.frequency?.rawValue ?? "none")), kind: .menuButton, enabled: !busy)
         if todo.frequency != nil {
             field("todoInterval", key: "todo.interval", value: todo.intervalText, enabled: !busy)
             paragraph("overlay.todo.repeat.help", text("todo.repeat_help"))
@@ -499,7 +582,7 @@ import AppKit
             }
         }
         row("overlay.save", label: text("event.save"), enabled: !busy, fill: .fill)
-        row("overlay.cancel", label: text("event.cancel"), enabled: !busy)
+        row("overlay.cancel", label: text("event.discard_changes"), enabled: !busy)
     }
     private func renderEvent() {
         guard let editor else {
@@ -514,6 +597,7 @@ import AppKit
                 paragraph("overlay.delete.explanation", text("event.delete_discard_prompt"))
                 row("overlay.delete.cancel", label: text("event.delete_keep"))
                 row("overlay.delete.discard", label: text("event.delete_discard"))
+                renderItems[renderItems.count - 1].color = .danger
             case .confirm:
                 let occurrence = editor.original.map { $0.item.recurring || $0.detached } ?? false
                 paragraph("overlay.delete.explanation", text(occurrence ? "event.delete_confirm_occurrence" : "event.delete_confirm"))
@@ -530,23 +614,23 @@ import AppKit
             return
         }
         let sourceEditable = !editor.isReadOnly && editor.metadataRetryID == nil && !busy
-        if case .newEvent = route { row("overlay.kind", label: text("quick.kind") + ": " + text("quick.kind_" + quickKind), enabled: !busy) }
+        if case .newEvent = route { row("overlay.kind", label: text("quick.kind") + ": " + text("quick.kind_" + quickKind), kind: .menuButton, enabled: !busy) }
         if editor.isReadOnly { paragraph("overlay.readonly", text("event.readonly_hint")) }
         field("title", key: "event.field_title", value: editor.event.title, enabled: sourceEditable)
         if quickKind == "event" {
             let calendar = state.snapshot.calendar.calendars.first { $0.id == editor.event.calendarID }
-            row("overlay.calendar", label: text("event.calendar") + ": " + (calendar?.title ?? text("error.no_writable")), enabled: sourceEditable)
+            row("overlay.calendar", label: text("event.calendar") + ": " + (calendar?.title ?? text("error.no_writable")), kind: .menuButton, enabled: sourceEditable)
             if state.snapshot.board.hiddenCalendarIDs.contains(editor.event.calendarID) { paragraph("overlay.hidden", text("event.hidden_calendar_help")) }
             date("start", key: "event.field_start", value: editor.event.start, enabled: sourceEditable, time: !editor.event.allDay)
             date("end", key: "event.field_end", value: editor.event.end, enabled: sourceEditable, time: !editor.event.allDay)
             row("overlay.allday", label: text("event.all_day"), kind: .checkBox, enabled: sourceEditable, checked: editor.event.allDay)
             if editor.original == nil {
                 let frequency = editor.event.recurrence?.frequency.rawValue ?? "none"
-                row("overlay.repeat", label: text("event.repeat") + ": " + text("event.repeat_" + frequency), enabled: sourceEditable)
+                row("overlay.repeat", label: text("event.repeat") + ": " + text("event.repeat_" + frequency), kind: .menuButton, enabled: sourceEditable)
                 if let recurrence = editor.event.recurrence {
                     field("repeatInterval", key: "event.repeat_interval", value: repeatIntervalText, enabled: sourceEditable)
                     let endKey: String = if case .never = recurrence.end { "never" } else { "date" }
-                    row("overlay.repeatEnd", label: text("event.repeat_end") + ": " + text("event.repeat_end_" + endKey), enabled: sourceEditable)
+                    row("overlay.repeatEnd", label: text("event.repeat_end") + ": " + text("event.repeat_end_" + endKey), kind: .menuButton, enabled: sourceEditable)
                     if case .onDate(let day) = recurrence.end {
                         let zone = TimeZone(identifier: state.snapshot.clock.timeZone) ?? .current
                         date("repeatEnd", key: "event.repeat_end_date", value: day.date(in: zone), enabled: sourceEditable, time: false)
@@ -554,18 +638,28 @@ import AppKit
                 }
             }
             let project = state.snapshot.board.projects.first { $0.id == editor.projectID }
-            row("overlay.project", label: text("event.project") + ": " + (project?.title ?? text("event.project_none")), enabled: !busy)
+            row("overlay.project", label: text("event.project") + ": " + (project?.title ?? text("event.project_none")), kind: .menuButton, enabled: !busy)
             row("overlay.pin", label: text("event.pin"), kind: .checkBox, enabled: !busy, checked: editor.pinned)
             row("overlay.more", label: text(moreDetails ? "event.fewer_details" : "event.more_details"))
             if moreDetails {
                 field("location", key: "event.location", value: editor.event.location, enabled: sourceEditable)
-                label("notes", "event.notes"); notesScroll.isHidden = false
+                label("notes", "event.notes"); usedNotes = true
                 notes.setAccessibilityLabel(text("event.notes"))
                 notesScroll.frame = CGRect(x: NativeSpace.xs, y: y, width: max(0, bodyWidth - NativeSpace.sm), height: NativeSize.compactTarget * 3)
                 notes.isEditable = sourceEditable
                 if notes.window?.firstResponder !== notes, !notes.hasMarkedText(), notes.string != editor.event.notes { notes.string = editor.event.notes }
-                notes.frame.size = CGSize(width: notesScroll.contentSize.width, height: max(notesScroll.contentSize.height, notes.layoutManager?.usedRect(for: notes.textContainer!).height ?? 0))
-                y += NativeSize.compactTarget * 3 + NativeSpace.sm
+                notes.frame.size.width = notesScroll.contentSize.width
+                let limit = max(NativeSize.compactTarget * 3, (floatingWindow?.screen?.visibleFrame.height ?? host.bounds.height) - NativeSpace.xxl * 2)
+                if let manager = notes.layoutManager, let container = notes.textContainer {
+                    // The full document determines the scroll extent, even when the viewport is screen-limited.
+                    manager.ensureLayout(for: container)
+                }
+                let used = notes.textContainer.flatMap { notes.layoutManager?.usedRect(for: $0).height } ?? 0
+                let height = min(limit, max(NativeSize.compactTarget * 3, ceil(used + notes.textContainerInset.height * 2)))
+                notesScroll.frame.size.height = height
+                notes.frame.size = CGSize(width: notesScroll.contentSize.width, height: max(height, used))
+                notesScroll.updateFade()
+                y += height + NativeSpace.sm
             }
             if editor.original?.item.recurring == true { paragraph("overlay.occurrence", text("event.this_occurrence")) }
             if editor.externalChange(in: state.snapshot) { paragraph("overlay.changed", text("error.stale_conflict")) }
@@ -577,7 +671,7 @@ import AppKit
         if canDelete(editor) { row("overlay.delete", label: text("event.delete"), enabled: !busy); renderItems[renderItems.count - 1].color = .danger }
         row("overlay.save", label: text(busy ? "toast.event_saving" : saveKey), enabled: !busy, fill: .fill)
         if unknownOperation != nil { row("overlay.reconcile", label: text("error.retry_action")) }
-        if case .newEvent = route { row("overlay.cancel", label: text("event.cancel")) }
+        if case .newEvent = route { row("overlay.cancel", label: text("event.discard_changes")) }
         else { y += NativeSize.overflowEdge }
     }
     private func renderSearch() {
@@ -697,8 +791,8 @@ import AppKit
         }
         paragraph("overlay.calendar.fixed", text("settings.calendar_fixed")); row("overlay.reset", label: text("settings.reset_layout")); paragraph("overlay.reset.hint", text("settings.reset_layout_hint"))
         label("focus", "timer.title")
-        row("overlay.focus.duration", label: text("timer.mode_focus", ["0": minutes(settings.focus.focusSeconds)]))
-        row("overlay.break.duration", label: text("timer.mode_break", ["0": minutes(settings.focus.breakSeconds)]))
+        row("overlay.focus.duration", label: text("timer.mode_focus", ["0": minutes(settings.focus.focusSeconds)]), kind: .menuButton)
+        row("overlay.break.duration", label: text("timer.mode_break", ["0": minutes(settings.focus.breakSeconds)]), kind: .menuButton)
         row("overlay.focus.notify", label: text("timer.notify_finish"), kind: .checkBox, checked: snapshot.notification.focusDesired)
         label("system", "settings.system")
         row("overlay.login", label: text("menu.launch_at_login"), kind: .checkBox, checked: OverlaySettings.loginChecked(snapshot))
@@ -785,7 +879,7 @@ import AppKit
         }
     }
     private func showSelectionMenu(_ id: String) -> Bool {
-        guard !disposed, !composing, !host.isHidden, host.window != nil,
+        guard !disposed, !composing, !host.isHidden, surface.window != nil,
               let item = content.items.first(where: { $0.id == id && $0.enabled }) else { return false }
         switch id {
         case "overlay.repeat":
@@ -933,7 +1027,7 @@ import AppKit
     }
     private func setDeleteStage(_ stage: DeleteStage, focus id: String) {
         deleteStage = stage; inlineMessage = nil; render()
-        host.window?.makeFirstResponder(content); context.focus.focus(FocusID(id))
+        surface.window?.makeFirstResponder(content); context.focus.focus(FocusID(id))
     }
     private func beginDelete() {
         guard !busy, !composing, let draft = editor, let original = draft.original, canDelete(draft) else { return }
@@ -943,7 +1037,7 @@ import AppKit
     }
     private func cancelDelete() {
         guard deleteStage != nil else { return }
-        deleteStage = nil; render(); host.window?.makeFirstResponder(content); context.focus.focus(FocusID("overlay.delete"))
+        deleteStage = nil; render(); surface.window?.makeFirstResponder(content); context.focus.focus(FocusID("overlay.delete"))
     }
     private func discardForDelete() {
         guard deleteStage == .discardDraft, !busy, !composing, let original = editor?.original, let draft = editor, canDelete(draft) else { return }
@@ -1124,7 +1218,7 @@ import AppKit
         case "citySearch": if !composing { cityPickerExpanded = true; requestCities(input.stringValue) }
         default: break
         }
-        if quickKind == "todo", !composing { render() }
+        if !composing && (quickKind == "todo" || id == "title" || id == "location" || id == "repeatInterval") { render() }
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if textView.hasMarkedText() { return false }
@@ -1139,7 +1233,7 @@ import AppKit
         if selector == #selector(NSResponder.insertNewline(_:)) { save(); return true }
         return false
     }
-    func textDidChange(_ notification: Notification) { editor?.event.notes = notes.string; saveDraft(); resumePresentation() }
+    func textDidChange(_ notification: Notification) { editor?.event.notes = notes.string; saveDraft(); if moreDetails { render() }; resumePresentation() }
     func controlTextDidEndEditing(_ notification: Notification) { resumePresentation() }
     private func resumePresentation() {
         guard !composing else { return }
@@ -1189,8 +1283,8 @@ import AppKit
             context.focus.move(forward: forward); return
         }
         let id = focusOrder[next]
-        if content.items.contains(where: { $0.id == id.rawValue }) { host.window?.makeFirstResponder(content) }
-        else if surface.items.contains(where: { $0.id == id.rawValue }) { host.window?.makeFirstResponder(surface) }
+        if content.items.contains(where: { $0.id == id.rawValue }) { surface.window?.makeFirstResponder(content) }
+        else if surface.items.contains(where: { $0.id == id.rawValue }) { surface.window?.makeFirstResponder(surface) }
         context.focus.focus(id)
     }
     @objc private func dateChanged(_ picker: NativeDatePicker) {
@@ -1214,7 +1308,11 @@ import AppKit
     }
     private func openEvent(_ id: String) {
         let rect = content.items.first { $0.id == "overlay.result.event." + id || $0.id == "overlay.agenda." + id }?.rect
-        let boardRect = rect.map { host.convert($0, from: content) } ?? surface.frame
+        let boardRect: CGRect
+        if let rect, let popupWindow = content.window, let boardWindow = host.window, popupWindow !== boardWindow {
+            let screenRect = popupWindow.convertToScreen(content.convert(rect, to: nil))
+            boardRect = host.convert(boardWindow.convertFromScreen(screenRect), from: nil)
+        } else { boardRect = rect.map { host.convert($0, from: content) } ?? surface.frame }
         context.routing.route(.openEvent(eventID: id, anchor: StableAnchor(target: .event(id), boardRect: boardRect, returnFocusID: returningFocus)))
     }
     private func handleKey(_ event: NSEvent) -> Bool {
@@ -1234,7 +1332,7 @@ import AppKit
     }
     func dismiss() {
         guard !composing else { return }
-        saveDraft(); closeChoices(restoreFocus: false); host.isHidden = true
+        saveDraft(); closeChoices(restoreFocus: false); host.isHidden = true; floatingWindow?.orderOut(nil)
     }
     private func requestDismiss() {
         guard !composing else { return }
@@ -1242,6 +1340,8 @@ import AppKit
     }
     func dispose() {
         guard !disposed else { return }; disposed = true; lifetime.dispose(); host.onLayout = nil
+        for observation in floatingObservations { NotificationCenter.default.removeObserver(observation) }; floatingObservations.removeAll()
+        if let panel = floatingWindow { panel.parent?.removeChildWindow(panel); panel.orderOut(nil); panel.contentView = nil; panel.close(); floatingWindow = nil }
         closeChoices(restoreFocus: false); content.onSelectionMenu = nil
         shadow.dispose()
         context.focus.unregister(owner: self); focusOrder = []; NativeMotion.stop(spinner); spinner.removeFromSuperlayer()

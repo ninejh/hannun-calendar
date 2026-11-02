@@ -2,6 +2,19 @@ import AppKit
 
 private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
 
+struct ProjectScrollHint: Equatable {
+    let viewport: CGRect
+    let before: Bool
+    let after: Bool
+    var markers: [CGRect] {
+        let x = viewport.maxX - NativeSpace.sm
+        let top = CGRect(x: x, y: viewport.minY + NativeSpace.xs, width: NativeSpace.xs, height: NativeSpace.xs)
+        let bottom = CGRect(x: x, y: viewport.maxY - NativeSpace.sm - NativeSpace.xxs, width: NativeSpace.xs, height: NativeSpace.xs)
+        guard viewport.width >= NativeSpace.sm, viewport.height >= NativeSpace.lg else { return [] }
+        return (before ? [top] : []) + (after ? [bottom] : [])
+    }
+}
+
 @MainActor final class ProjectDeckCanvas: ManagementCanvas {
     var schedules: [String: CGRect] = [:]
     var scheduleIndicators: [String: CGRect] = [:]
@@ -11,6 +24,16 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
     var itemViewports: [String: CGRect] = [:]
     var onCardScroll: (@MainActor (String, CGFloat) -> Bool)?
     var onRevealCardItem: (@MainActor (String) -> CGRect?)?
+    private(set) var scrollHints: [String: ProjectScrollHint] = [:]
+    func updateScrollHints(_ next: [String: ProjectScrollHint]) {
+        for key in Set(scrollHints.keys).union(next.keys) where scrollHints[key] != next[key] {
+            for rect in (scrollHints[key]?.markers ?? []) + (next[key]?.markers ?? []) {
+                setNeedsDisplay(rect.insetBy(dx: -NativeSize.focusWidth / 2, dy: -NativeSize.focusWidth / 2))
+            }
+        }
+        scrollHints = next
+    }
+    override func dispose() { scrollHints.removeAll(); super.dispose() }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         theme.color(.lineStrong).setFill()
@@ -19,6 +42,12 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: viewport).addClip()
             NSBezierPath(roundedRect: indicator, xRadius: NativeSpace.xxs, yRadius: NativeSpace.xxs).fill()
             NSGraphicsContext.restoreGraphicsState()
+        }
+        theme.color(.textQuiet).setFill()
+        for hint in scrollHints.values where hint.viewport.intersects(visibleRect) {
+            for marker in hint.markers where marker.intersects(dirtyRect) {
+                NSBezierPath(roundedRect: marker, xRadius: NativeSpace.xxs, yRadius: NativeSpace.xxs).fill()
+            }
         }
     }
     override func paint(_ item: NativeRenderItem) {
@@ -92,6 +121,9 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
     let content: ProjectDeckCanvas
     let scroll = OverflowScrollView(frame: .zero)
     private let lifetime = ScreenLifetime()
+    private var viewportObservation: NSObjectProtocol?
+    private struct NavigationAvailability: Equatable { var previous: Bool; var next: Bool }
+    private var navigationAvailability: NavigationAvailability?
     private var retainedMenu: NativeMenu?
     private(set) var variant: SlotVariant = .wide
     private(set) var heightStep: PanelSizeStep = .regular
@@ -126,6 +158,9 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         surface.setAccessibilityIdentifier("panel.projects"); surface.setAccessibilityLabel(context.text("projects.title"))
         content.setAccessibilityIdentifier("projects.deck"); content.setAccessibilityLabel(context.text("a11y.projects"))
         scroll.documentView = content; surface.addSubview(scroll)
+        viewportObservation = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateNavigation() }
+        }
         surface.onLayout = { [weak self] in self?.render() }
         surface.onAction = { [weak self] in self?.act($0) }
         content.onAction = { [weak self] in self?.act($0) }
@@ -288,7 +323,6 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         if let slot = placement?.slot, placement?.editExclusions.isEmpty == false {
             headerItems[0] = NativePanelHeader.decorate(headerItems[0], geometry: PanelHeaderGeometry(slot: slot, titleRect: headerItems[0].rect, headerRect: CGRect(x: 0, y: 0, width: width, height: header), excludedRects: headerItems.dropFirst().map(\.hitRect) + (placement?.editExclusions ?? []), actionLabel: context.text("slot_menu.title")))
         }
-        surface.update(items: headerItems)
         let viewport = scroll.contentSize
         let gap = metrics.cardGap, inset = condensed ? 0 : NativeSpace.sm
         let count = visibleProjects.count
@@ -303,7 +337,8 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             CGRect(x: inset + (variant == .wide ? CGFloat(i) * (cardWidth + gap) : 0), y: inset + errorHeight + (variant == .tall ? CGFloat(i) * (cardHeight + rowGap) : 0), width: cardWidth, height: cardHeight)
         }
         content.frame.size = CGSize(width: max(viewport.width, variant == .wide ? CGFloat(count) * (cardWidth + gap) + inset * 2 - gap : viewport.width), height: max(viewport.height, errorHeight + (variant == .tall ? CGFloat(count) * (cardHeight + rowGap) + inset * 2 - rowGap : cardHeight + inset * 2)))
-        var items: [NativeRenderItem] = []; content.styles = [:]; content.displayLabels = [:]; content.tints = [:]; content.schedules = [:]; content.scheduleIndicators = [:]
+        var items: [NativeRenderItem] = []; var scrollHints: [String: ProjectScrollHint] = [:]
+        content.styles = [:]; content.displayLabels = [:]; content.tints = [:]; content.schedules = [:]; content.scheduleIndicators = [:]
         content.cardViewports = [:]; content.itemViewports = [:]; logicalCardItems = [:]; logicalCardOwners = [:]; fixedCardItems = []; cardDocumentHeights = [:]
         scheduleLimits = [:]; scheduleLogicalItems = [:]; scheduleItemOwners = [:]; scheduleRects = [:]
         func append(_ item: NativeRenderItem, _ style: ManagementCanvas.Style? = nil) { items.append(item); content.styles[item.id] = style }
@@ -311,7 +346,7 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         for (index, project) in visibleProjects.enumerated() {
             let rect = cardRects[index], base = "project." + project.id.uuidString.lowercased(), x = rect.minX + NativeSpace.sm, inner = max(0, rect.width - NativeSpace.lg)
             if condensed {
-                renderCompact(project, rect: rect, snapshot: snapshot, append: append)
+                renderCompact(project, rect: rect, snapshot: snapshot, hints: &scrollHints, append: append)
                 continue
             }
             append(NativeRenderItem(id: base + ".card", rect: rect, label: project.title, kind: .group), .card)
@@ -327,7 +362,7 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
             content.displayLabels[base + ".addTodo"] = ""; content.itemViewports[base + ".addTodo"] = rect
             if let target = project.targetDay { append(NativeRenderItem(id: base + ".badge", rect: CGRect(x: rect.maxX - NativeSize.compactTarget * 4, y: rect.minY + NativeSize.compactTarget + NativeSpace.sm, width: NativeSize.compactTarget * 3, height: NativeSize.compactTarget), label: DeadlineRows.badge(day: target, today: snapshot.clock.today, context: context), kind: .badge, color: target < snapshot.clock.today ? .danger : .textSecondary), .secondary) }
             let scheduleRect = CGRect(x: x, y: rect.minY + NativeSize.compactTarget * 2 + NativeSpace.xs, width: inner, height: max(NativeSize.compactTarget, rect.height - NativeSize.compactTarget * 5 - NativeSpace.sm))
-            renderSchedule(project, rect: scheduleRect, clip: rect, snapshot: snapshot, append: append)
+            renderSchedule(project, rect: scheduleRect, clip: rect, snapshot: snapshot, hints: &scrollHints, append: append)
             let progressY = rect.maxY - NativeSize.compactTarget * 2 - NativeSpace.md
             append(NativeRenderItem(id: base + ".progress.label", rect: CGRect(x: x, y: progressY, width: NativeSize.compactTarget * 2.5, height: NativeSize.compactTarget), label: context.text("projects.progress"), kind: .text), .secondary)
             let slider = CGRect(x: x + NativeSize.compactTarget * 2.5, y: progressY, width: max(0, inner - NativeSize.compactTarget * 4), height: NativeSize.compactTarget)
@@ -339,9 +374,54 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         }
 
         if let error = inlineError { append(NativeRenderItem(id: "projects.error", rect: CGRect(x: inset, y: 0, width: viewport.width, height: NativeSize.compactTarget), label: context.text(error.messageKey), kind: .button, color: .danger)) }
-        content.update(items: items); scroll.updateFade()
+        content.updateScrollHints(scrollHints); content.update(items: items); scroll.updateFade()
+        configureNavigation(&headerItems); updateHeader(headerItems)
     }
-    private func renderCompact(_ project: Project, rect: CGRect, snapshot: BoardSnapshot, append: (NativeRenderItem, ManagementCanvas.Style?) -> Void) {
+    private func updateNavigation() {
+        guard currentNavigationAvailability() != navigationAvailability else { return }
+        var items = surface.items
+        configureNavigation(&items)
+        updateHeader(items, announceLayout: false)
+    }
+    private func updateHeader(_ items: [NativeRenderItem], announceLayout: Bool = true) {
+        let previousFocus = context.focus.focusedID
+        let keyboard = context.focus.keyboardFocus
+        let priorID = previousFocus?.rawValue
+        let wasNavigation = priorID == "projects.previous" || priorID == "projects.next"
+        let disabled = wasNavigation && items.contains { $0.id == priorID && !$0.enabled }
+        let alternative = priorID == "projects.previous" ? "projects.next" : "projects.previous"
+        surface.update(items: items, announceLayout: announceLayout)
+        if disabled && context.focus.focusedID == nil {
+            let target = items.contains { $0.id == alternative && $0.enabled } ? alternative : "projects.add"
+            context.focus.focus(FocusID(target), keyboard: keyboard)
+        }
+    }
+    private func currentNavigationAvailability() -> NavigationAvailability {
+        let viewport = scroll.contentView.bounds
+        let document = content.bounds
+        let horizontal = variant == .wide
+        let length = horizontal ? viewport.width : viewport.height
+        let documentLength = horizontal ? document.width : document.height
+        let offset = horizontal ? viewport.minX - document.minX : viewport.minY - document.minY
+        let limit = max(0, documentLength - length)
+        let hasViewport = length > 0
+        return NavigationAvailability(previous: hasViewport && offset > 0.5, next: hasViewport && offset < limit - 0.5)
+    }
+    private func configureNavigation(_ items: inout [NativeRenderItem]) {
+        let availability = currentNavigationAvailability()
+        navigationAvailability = availability
+        for index in items.indices {
+            let enabled: Bool
+            switch items[index].id {
+            case "projects.previous": enabled = availability.previous
+            case "projects.next": enabled = availability.next
+            default: continue
+            }
+            items[index].enabled = enabled
+            items[index].fill = enabled ? .hover : nil
+        }
+    }
+    private func renderCompact(_ project: Project, rect: CGRect, snapshot: BoardSnapshot, hints: inout [String: ProjectScrollHint], append: (NativeRenderItem, ManagementCanvas.Style?) -> Void) {
         let base = "project." + project.id.uuidString.lowercased(), row = NativeSize.compactTarget
         let x = rect.minX + NativeSpace.sm, inner = max(0, rect.width - NativeSpace.lg)
         let tiny = heightStep == .tiny, badgeWidth = row * 3
@@ -354,6 +434,10 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         let offset = min(max(0, cardOffsets[base] ?? 0), max(0, documentHeight - rect.height))
         cardOffsets[base] = offset; content.cardViewports[base] = rect
         let bodyClip = CGRect(x: rect.minX, y: min(rect.maxY, rect.minY + row), width: rect.width, height: max(0, rect.height - row))
+        let cardLimit = max(0, documentHeight - rect.height)
+        if cardLimit > 0 {
+            hints[base + ".card"] = ProjectScrollHint(viewport: bodyClip, before: offset > 0, after: offset < cardLimit)
+        }
         append(NativeRenderItem(id: base + ".card", rect: rect, label: project.title, kind: .group), .card)
         func add(_ suffix: String, x itemX: CGFloat = 0, y: CGFloat, width: CGFloat, label: String, kind: NativeRenderItem.Kind = .button, style: ManagementCanvas.Style = .secondary, value: String? = nil, slider: NativeSliderMetadata? = nil, fill: NativeColorToken? = nil, enabled: Bool = true) {
             let logical = CGRect(x: x + itemX, y: rect.minY + y, width: max(0, width), height: row)
@@ -387,9 +471,9 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         add(".menu", x: inner - row, y: controlsY, width: row, label: context.text("a11y.item_options", values: ["0": project.title]), style: .plain)
         content.displayLabels[base + ".menu"] = "···"
         let scheduleRect = CGRect(x: x, y: rect.minY + scheduleY - offset, width: inner, height: row)
-        renderSchedule(project, rect: scheduleRect, clip: bodyClip, snapshot: snapshot, append: append)
+        renderSchedule(project, rect: scheduleRect, clip: bodyClip, snapshot: snapshot, hints: &hints, append: append)
     }
-    private func renderSchedule(_ project: Project, rect: CGRect, clip: CGRect, snapshot: BoardSnapshot, append: (NativeRenderItem, ManagementCanvas.Style?) -> Void) {
+    private func renderSchedule(_ project: Project, rect: CGRect, clip: CGRect, snapshot: BoardSnapshot, hints: inout [String: ProjectScrollHint], append: (NativeRenderItem, ManagementCanvas.Style?) -> Void) {
         let base = "project." + project.id.uuidString.lowercased(), linked = events(project), tasks = todos(project)
         let visible = rect.intersection(clip)
         let viewport = visible.isNull ? CGRect.zero : visible
@@ -399,6 +483,7 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
         let offset = min(max(0, scheduleOffsets[project.id] ?? 0), limit)
         scheduleLimits[base] = limit
         if limit > 0 {
+            hints[base + ".schedule"] = ProjectScrollHint(viewport: viewport, before: offset > 0, after: offset < limit)
             let height = min(rect.height, max(NativeSpace.xs, rect.height * rect.height / (limit + rect.height)))
             let y = rect.minY + (rect.height - height) * offset / limit
             content.scheduleIndicators[base] = CGRect(x: rect.maxX - NativeSpace.xxs, y: y, width: NativeSpace.xxs, height: height)
@@ -592,6 +677,7 @@ private enum ProjectStepLayout { static let tinyWideCardHeight: CGFloat = 64 }
     }
     func dispose() {
         guard !disposed else { return }; disposed = true; lifetime.dispose(); closeEditor(); retainedMenu?.dispose(); retainedMenu = nil
+        if let viewportObservation { NotificationCenter.default.removeObserver(viewportObservation) }; viewportObservation = nil
         progressDesired = [:]; progressInFlight = [:]; progressUnknown = [:]
         if let layer = scroll.contentView.layer { NativeMotion.stop(layer) }
         surface.onLayout = nil; content.onScheduleScroll = nil; content.onProgress = nil
