@@ -2,12 +2,64 @@ import AppKit
 
 @MainActor private final class ProjectDeadlineSurface: PanelContainerView {
     var showSelector: (@MainActor (String) -> Bool)?
+    var onTab: (@MainActor (Bool) -> Bool)?
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 48, onTab?(!event.modifierFlags.contains(.shift)) == true { return }
+        super.keyDown(with: event)
+    }
+    override var acceptsFirstResponder: Bool {
+        (window?.firstResponder as? NSTextView)?.hasMarkedText() != true
+    }
+    override func mouseDown(with event: NSEvent) {
+        guard (window?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return }
+        super.mouseDown(with: event)
+    }
     override func showMenu(for id: String) -> Bool { showSelector?(id) ?? false }
     override func paint(_ item: NativeRenderItem) {
-        guard item.id == "management.heading" || item.id == "management.error" else { super.paint(item); return }
+        if item.id.hasPrefix("management.color."), let index = Int(item.id.split(separator: ".").last ?? ""), ProjectPalette.colors.indices.contains(index) {
+            let circle = item.rect.insetBy(dx: 4, dy: 4)
+            NSColor(nativeHex: ProjectPalette.colors[index]).setFill(); NSBezierPath(ovalIn: circle).fill()
+            if item.checked {
+                theme.color(.textPrimary).setStroke()
+                let ring = NSBezierPath(ovalIn: item.rect.insetBy(dx: 1, dy: 1)); ring.lineWidth = 1.5; ring.stroke()
+                NSColor.white.setStroke()
+                let check = NSBezierPath(); check.lineWidth = 2
+                check.move(to: CGPoint(x: circle.minX + 4, y: circle.midY))
+                check.line(to: CGPoint(x: circle.midX - 1, y: circle.maxY - 5))
+                check.line(to: CGPoint(x: circle.maxX - 4, y: circle.minY + 5)); check.stroke()
+            }
+            if focus.keyboardFocus && focus.focusedID == item.focusID {
+                theme.color(.accentBlue).setStroke()
+                let ring = NSBezierPath(ovalIn: item.rect.insetBy(dx: -NativeSize.focusOffset, dy: -NativeSize.focusOffset)); ring.lineWidth = NativeSize.focusWidth; ring.stroke()
+            }
+            return
+        }
+        if item.id == "management.color.preview" {
+            NSColor(nativeHex: item.value ?? "000000").setFill(); NSBezierPath(roundedRect: item.rect.insetBy(dx: 3, dy: 3), xRadius: 4, yRadius: 4).fill(); return
+        }
+        guard item.id == "management.heading" || item.id == "management.error" || item.id == "management.color.error" else { super.paint(item); return }
         let rect = item.rect.insetBy(dx: NativeSpace.sm, dy: 0)
         (item.label as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading],
                                       attributes: NativeFont.attributes(font: NativeFont.primary, color: theme.color(item.color), truncation: .byWordWrapping))
+    }
+}
+
+@MainActor final class ProjectDeadlineDatePicker: NSDatePicker {
+    var onTab: (@MainActor (Bool) -> Bool)?
+    init(label: String, identifier: String, timeZone: TimeZone) {
+        super.init(frame: .zero); datePickerStyle = .textFieldAndStepper
+        datePickerElements = [.yearMonthDay]; self.timeZone = timeZone
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone; self.calendar = calendar
+        font = NativeFont.body; setAccessibilityLabel(label); setAccessibilityIdentifier(identifier)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+    var day: DateOnly? {
+        get { DateOnly(date: dateValue, timeZone: timeZone ?? .current) }
+        set { if let newValue { dateValue = newValue.date(in: timeZone ?? .current) } }
+    }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 48, onTab?(!event.modifierFlags.contains(.shift)) == true { return }
+        super.keyDown(with: event)
     }
 }
 
@@ -18,8 +70,8 @@ import AppKit
     let kind: Kind
     let id: UUID
     let titleField: NativeTextField
-    let datePicker: NativeDatePicker
-    let colorWell = NSColorWell(frame: .zero)
+    let datePicker: ProjectDeadlineDatePicker
+    let hexField: NativeTextField
     let surface: PanelContainerView
     let popover = NSPopover()
     private let host = NSViewController()
@@ -41,7 +93,8 @@ import AppKit
     private let initialStatus: ProjectStatus
     private let initialColorHex: String
     private(set) var selectedColorHex: String
-    var colorWasChanged: Bool { selectedColorHex != initialColorHex }
+    private var colorWasTouched = false
+    var colorWasChanged: Bool { colorWasTouched }
     private var statusMenu: NativeMenu?
     private var disposed = false
     var draftKey: DraftKey { kind == .project ? .project(id) : .countdown(id) }
@@ -56,7 +109,8 @@ import AppKit
         let titleKey = kind == .project ? "projects.field_name" : "deadlines.field_title"
         let dateKey = kind == .project ? "projects.field_target" : "deadlines.field_date"
         titleField = NativeTextField(label: context.text(titleKey), identifier: "management.\(id).title")
-        datePicker = NativeDatePicker(label: context.text(dateKey), identifier: "management.\(id).date", timeZone: TimeZone(identifier: context.presentation.state.snapshot.environment.timeZone) ?? .current)
+        hexField = NativeTextField(label: context.text("projects.color_hex"), identifier: "management.color.hex")
+        datePicker = ProjectDeadlineDatePicker(label: context.text(dateKey), identifier: "management.\(id).date", timeZone: TimeZone(identifier: context.presentation.state.snapshot.environment.timeZone) ?? .current)
         surface = ProjectDeadlineSurface(frame: CGRect(x: 0, y: 0, width: NativeSize.popoverWidth, height: NativeSize.popoverWidth - NativeSpace.xxl), focus: context.focus)
         super.init()
         titleField.stringValue = context.presentation.state.drafts[draftKey]?.textValue?.text ?? title
@@ -65,16 +119,44 @@ import AppKit
         datePicker.target = self; datePicker.action = #selector(dateChanged)
         surface.addSubview(titleField); surface.addSubview(datePicker)
         if kind == .project {
-            colorWell.color = NSColor(nativeHex: initialColor); colorWell.target = self; colorWell.action = #selector(colorChanged)
-            colorWell.setAccessibilityIdentifier("management.color"); surface.addSubview(colorWell)
+            hexField.stringValue = "#" + initialColor.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            hexField.delegate = self; hexField.target = self; hexField.action = #selector(submitAction)
+            surface.addSubview(hexField)
         }
         surface.onAction = { [weak self] action in self?.act(action) }
+        if kind == .project {
+            datePicker.onTab = { [weak self] forward in
+                guard let self, !self.pending else { return true }
+                guard (self.datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return true }
+                if forward { self.context.focus.focus(FocusID("management.date.toggle")) }
+                else { self.surface.window?.makeFirstResponder(self.titleField) }
+                return true
+            }
+            (surface as? ProjectDeadlineSurface)?.onTab = { [weak self] forward in
+                guard let self, !self.pending else { return true }
+                let ids = self.surface.items.filter { $0.isInteractive && $0.enabled }.map(\.id)
+                guard !ids.isEmpty else { return true }
+                let current = self.context.focus.focusedID?.rawValue
+                if (forward && current == "management.color.7") || (!forward && current == "management.cancel") {
+                    self.surface.window?.makeFirstResponder(self.hexField); return true
+                }
+                guard let index = current.flatMap({ ids.firstIndex(of: $0) }) else {
+                    self.context.focus.focus(FocusID(forward ? ids[0] : ids[ids.count - 1])); return true
+                }
+                let next = index + (forward ? 1 : -1)
+                if ids.indices.contains(next) { self.context.focus.focus(FocusID(ids[next])) }
+                else if forward || !self.targetEnabled { self.surface.window?.makeFirstResponder(self.titleField) }
+                else { self.surface.window?.makeFirstResponder(self.datePicker) }
+                return true
+            }
+        }
         (surface as? ProjectDeadlineSurface)?.showSelector = { [weak self] action in
             guard let self, action == "management.status", !self.pending, !self.disposed,
                   self.surface.window != nil,
                   self.surface.items.contains(where: { $0.id == action && $0.enabled && $0.isInteractive }),
                   (self.titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true,
-                  (self.datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return false }
+                  (self.datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+                  (self.hexField.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return false }
             self.act(action)
             return true
         }
@@ -132,7 +214,7 @@ import AppKit
         titleField.setAccessibilityLabel(context.text(kind == .project ? "projects.field_name" : "deadlines.field_title"))
         datePicker.setAccessibilityLabel(context.text(kind == .project ? "projects.field_target" : "deadlines.field_date"))
         titleField.isEnabled = !pending; datePicker.isEnabled = !pending
-        colorWell.isEnabled = !pending; colorWell.setAccessibilityLabel(context.text("projects.field_color"))
+        hexField.isEnabled = !pending; hexField.setAccessibilityLabel(context.text("projects.color_hex"))
         datePicker.isHidden = !targetEnabled
         let bodyWidth = max(1, width - inset * 2)
         func wrapped(_ value: String) -> CGFloat {
@@ -153,8 +235,21 @@ import AppKit
         }
         if kind == .project {
             y += NativeSpace.xs
-            colorWell.frame = CGRect(x: width - inset - line * 2, y: y, width: line * 2, height: line)
-            items.append(NativeRenderItem(id: "management.color.label", rect: CGRect(x: inset, y: y, width: max(1, bodyWidth - line * 2), height: line), label: context.text("projects.field_color"), kind: .text)); y += line
+            items.append(NativeRenderItem(id: "management.color.label", rect: CGRect(x: inset, y: y, width: bodyWidth, height: line), label: context.text("projects.field_color"), kind: .text)); y += line
+            let swatch = min(line, 28), columns = max(1, Int(bodyWidth / swatch))
+            let names = ["mint", "purple", "amber", "red", "peach", "sky", "rose", "blue"]
+            for (index, hex) in ProjectPalette.colors.enumerated() {
+                let rect = CGRect(x: inset + CGFloat(index % columns) * swatch, y: y + CGFloat(index / columns) * swatch, width: swatch, height: swatch)
+                items.append(NativeRenderItem(id: "management.color.\(index)", rect: rect, label: context.text("projects.color_" + names[index]), kind: .checkBox, enabled: !pending, checked: selectedColorHex.caseInsensitiveCompare(hex) == .orderedSame))
+            }
+            y += CGFloat((ProjectPalette.colors.count + columns - 1) / columns) * swatch + NativeSpace.xs
+            items.append(NativeRenderItem(id: "management.color.preview", rect: CGRect(x: inset, y: y, width: line, height: line), label: context.text("projects.color_preview"), kind: .text, value: selectedColorHex))
+            hexField.frame = CGRect(x: inset + line, y: y, width: max(1, bodyWidth - line), height: line); y += line
+            if parsedHex == nil || (hexField.currentEditor() as? NSTextView)?.hasMarkedText() == true {
+                let message = context.text("projects.color_invalid"), height = wrapped(message)
+                items.append(NativeRenderItem(id: "management.color.error", rect: CGRect(x: inset, y: y, width: bodyWidth, height: height), label: message, kind: .text, color: .danger)); y += height
+                hexField.setAccessibilityHelp(message)
+            } else { hexField.setAccessibilityHelp(nil) }
         }
         if let key = validationKey ?? failure?.messageKey {
             y += NativeSpace.sm
@@ -164,7 +259,7 @@ import AppKit
         let buttonY = y + NativeSpace.sm
         items.append(NativeRenderItem(id: "management.cancel", rect: CGRect(x: inset, y: buttonY, width: line * 3, height: line), label: context.text("event.cancel"), kind: .button, enabled: !pending))
         let key = pending ? "loading.label" : failure != nil ? "error.retry_action" : creating ? (kind == .project ? "projects.submit_add" : "deadlines.submit_add") : "event.save_changes"
-        items.append(NativeRenderItem(id: "management.submit", rect: CGRect(x: width / 2, y: buttonY, width: width / 2 - inset, height: line), label: context.text(key), kind: .button, enabled: !pending, fill: .fill, color: .toastText))
+        items.append(NativeRenderItem(id: "management.submit", rect: CGRect(x: width / 2, y: buttonY, width: width / 2 - inset, height: line), label: context.text(key), kind: .button, enabled: !pending && (kind != .project || (parsedHex != nil && (hexField.currentEditor() as? NSTextView)?.hasMarkedText() != true)), fill: .fill, color: .toastText))
         let contentHeight = buttonY + line + inset
         surface.frame = CGRect(x: 0, y: 0, width: width, height: contentHeight)
         scroll.frame.size = CGSize(width: min(width, availableWidth), height: min(contentHeight, max(1, availableFrame.height - NativeSpace.lg * 2)))
@@ -173,7 +268,11 @@ import AppKit
         scroll.updateFade()
     }
     private func act(_ action: String) {
-        guard !pending else { return }
+        guard !pending, (surface.window?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return }
+        if action.hasPrefix("management.color."), let index = Int(action.split(separator: ".").last ?? ""), ProjectPalette.colors.indices.contains(index) {
+            selectedColorHex = ProjectPalette.colors[index]; colorWasTouched = true
+            hexField.stringValue = "#" + selectedColorHex; render(); return
+        }
         switch action {
         case "management.cancel": _ = cancel()
         case "management.submit": submit()
@@ -190,21 +289,49 @@ import AppKit
     }
     @objc private func submitAction() { submit() }
     @objc private func dateChanged() { validationKey = nil; render() }
-    @objc private func colorChanged() {
-        guard !pending, let color = colorWell.color.usingColorSpace(.sRGB) else { return }
-        selectedColorHex = String(format: "%02X%02X%02X", Int((color.redComponent * 255).rounded()), Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()))
-        render()
+    private var parsedHex: String? {
+        let raw = hexField.stringValue
+        let digits = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
+        guard digits.utf8.count == 6, digits.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }) else { return nil }
+        return digits.uppercased()
+    }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard kind == .project, control === titleField || control === hexField,
+              (commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:))) else { return false }
+        guard !textView.hasMarkedText(), !pending else { return true }
+        let forward = commandSelector == #selector(NSResponder.insertTab(_:))
+        if control === titleField {
+            if forward && targetEnabled { surface.window?.makeFirstResponder(datePicker) }
+            else if forward { context.focus.focus(FocusID("management.date.toggle")) }
+            else if let last = surface.items.last(where: { $0.isInteractive && $0.enabled }) {
+                context.focus.focus(FocusID(last.id))
+            }
+        } else {
+            guard surface.window?.makeFirstResponder(surface) == true else { return true }
+            context.focus.focus(FocusID(forward ? "management.cancel" : "management.color.7"))
+        }
+        return true
     }
     func controlTextDidChange(_ obj: Notification) {
-        validationKey = nil
-        let editor = titleField.currentEditor() as? NSTextView
-        context.presentation.setDraft(draftKey, value: .text(TextDraft(text: titleField.stringValue, selection: editor?.selectedRange() ?? NSRange(location: 0, length: 0), markedRange: editor?.hasMarkedText() == true ? editor?.markedRange() : nil)))
+        if obj.object as? NSTextField === hexField {
+            colorWasTouched = true
+            if (hexField.currentEditor() as? NSTextView)?.hasMarkedText() != true, let hex = parsedHex { selectedColorHex = hex }
+        } else if obj.object as? NSTextField === titleField {
+            validationKey = nil
+            let editor = titleField.currentEditor() as? NSTextView
+            context.presentation.setDraft(draftKey, value: .text(TextDraft(text: titleField.stringValue, selection: editor?.selectedRange() ?? NSRange(location: 0, length: 0), markedRange: editor?.hasMarkedText() == true ? editor?.markedRange() : nil)))
+        }
         render()
     }
     func submit() {
         guard !pending, !disposed else { return }
         guard (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true,
-              (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
+              (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+              (hexField.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
+        if kind == .project {
+            guard let hex = parsedHex else { render(); return }
+            selectedColorHex = hex
+        }
         // End native field editing before capturing the submitted values, so the
         // shared field editor cannot accept keystrokes or start IME while saving.
         if let window = surface.window, !window.makeFirstResponder(surface) { return }
@@ -229,9 +356,11 @@ import AppKit
         }
     }
     var canDismiss: Bool {
-        !pending && failure == nil && context.presentation.state.drafts[draftKey] == nil && !colorWell.isActive &&
+        !pending && failure == nil && context.presentation.state.drafts[draftKey] == nil &&
         (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true &&
         (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true &&
+        (hexField.currentEditor() as? NSTextView)?.hasMarkedText() != true &&
+        (kind != .project || hexField.stringValue == "#" + initialColorHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))) &&
         titleField.stringValue == initialTitle && datePicker.day == initialDay &&
         targetEnabled == initialTargetEnabled && status == initialStatus && selectedColorHex == initialColorHex
     }
@@ -241,7 +370,8 @@ import AppKit
         // Escape belongs to the input method during composition. An admitted
         // write must settle before cancellation can discard its retry draft.
         guard !pending, (titleField.currentEditor() as? NSTextView)?.hasMarkedText() != true,
-              (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return false }
+              (datePicker.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+              (hexField.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return false }
         context.presentation.clearDraft(draftKey)
         finishClose()
         return true
@@ -251,7 +381,7 @@ import AppKit
     func dispose() {
         guard !disposed else { return }; disposed = true
         for observation in windowObservations { NotificationCenter.default.removeObserver(observation) }; windowObservations.removeAll()
-        colorWell.deactivate(); popover.delegate = nil; popover.close(); onClose = nil; commit = nil; statusMenu?.dispose(); statusMenu = nil
-        titleField.delegate = nil; titleField.target = nil; datePicker.target = nil; colorWell.target = nil; scroll.dispose(); scroll.documentView = nil; surface.dispose()
+        popover.delegate = nil; popover.close(); onClose = nil; commit = nil; statusMenu?.dispose(); statusMenu = nil
+        titleField.delegate = nil; titleField.target = nil; datePicker.target = nil; datePicker.onTab = nil; hexField.delegate = nil; hexField.target = nil; scroll.dispose(); scroll.documentView = nil; surface.dispose()
     }
 }

@@ -101,6 +101,10 @@ struct ProjectScrollHint: Equatable {
             if let card = cardViewports.first(where: { $0.value.contains(point) }), onCardScroll?(card.key, -event.scrollingDeltaY) == true { return }
         }
         guard let scroll = enclosingScrollView as? OverflowScrollView else { return }
+        // A stationary phase event still closes the native live-scroll lifecycle.
+        if event.scrollingDeltaX == 0 && event.scrollingDeltaY == 0 && (!event.phase.isEmpty || !event.momentumPhase.isEmpty) {
+            scroll.scrollWheel(with: event); return
+        }
         let horizontal = scroll.axis == .horizontal
         if horizontal && abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) { return }
         if !horizontal && abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) { return }
@@ -361,9 +365,10 @@ struct ProjectScrollHint: Equatable {
             append(NativeRenderItem(id: base + ".addTodo", rect: CGRect(x: rect.maxX - NativeSpace.sm - NativeSize.compactTarget, y: rect.minY + NativeSpace.sm, width: NativeSize.compactTarget, height: NativeSize.compactTarget), label: context.text("todo.add_action"), kind: .button), .plain)
             content.displayLabels[base + ".addTodo"] = ""; content.itemViewports[base + ".addTodo"] = rect
             if let target = project.targetDay { append(NativeRenderItem(id: base + ".badge", rect: CGRect(x: rect.maxX - NativeSize.compactTarget * 4, y: rect.minY + NativeSize.compactTarget + NativeSpace.sm, width: NativeSize.compactTarget * 3, height: NativeSize.compactTarget), label: DeadlineRows.badge(day: target, today: snapshot.clock.today, context: context), kind: .badge, color: target < snapshot.clock.today ? .danger : .textSecondary), .secondary) }
-            let scheduleRect = CGRect(x: x, y: rect.minY + NativeSize.compactTarget * 2 + NativeSpace.xs, width: inner, height: max(NativeSize.compactTarget, rect.height - NativeSize.compactTarget * 5 - NativeSpace.sm))
-            renderSchedule(project, rect: scheduleRect, clip: rect, snapshot: snapshot, hints: &scrollHints, append: append)
             let progressY = rect.maxY - NativeSize.compactTarget * 2 - NativeSpace.md
+            let scheduleY = rect.minY + NativeSize.compactTarget * 2 + NativeSpace.xs
+            let scheduleRect = CGRect(x: x, y: scheduleY, width: inner, height: max(0, progressY - scheduleY))
+            renderSchedule(project, rect: scheduleRect, clip: rect, snapshot: snapshot, hints: &scrollHints, append: append)
             append(NativeRenderItem(id: base + ".progress.label", rect: CGRect(x: x, y: progressY, width: NativeSize.compactTarget * 2.5, height: NativeSize.compactTarget), label: context.text("projects.progress"), kind: .text), .secondary)
             let slider = CGRect(x: x + NativeSize.compactTarget * 2.5, y: progressY, width: max(0, inner - NativeSize.compactTarget * 4), height: NativeSize.compactTarget)
             append(NativeRenderItem(id: base + ".progress", rect: slider, label: context.text("a11y.project_progress", values: ["project": project.title]), kind: .slider, value: "\(project.progress)%", slider: NativeSliderMetadata(orientation: .horizontal, minimumValue: 0, maximumValue: 100, value: Double(project.progress))), .progress(project.progress)); content.tints[base + ".progress"] = project.colorHex
@@ -428,8 +433,9 @@ struct ProjectScrollHint: Equatable {
         let statusLabel = context.text(ManagementCopy.status(project.status))
         let statusWidth = min(max(0, inner - row * 3), max(row * 4, ceil((statusLabel as NSString).size(withAttributes: [.font: NativeFont.primary]).width) + NativeSpace.xxl * 2))
         let scheduleY = tiny ? row * 4 + NativeSpace.xxs : row * 3
-        let controlsY = tiny ? row * 2 + NativeSpace.xxs : scheduleY + row
-        let documentHeight = max(rect.height, max(controlsY + row, scheduleY + row) + NativeSpace.xs)
+        let controlsY = tiny ? row * 2 + NativeSpace.xxs : row * 2
+        let scheduleHeight = tiny ? row : max(row, rect.height - scheduleY - NativeSpace.xs)
+        let documentHeight = max(rect.height, scheduleY + scheduleHeight + NativeSpace.xs)
         cardDocumentHeights[base] = documentHeight
         let offset = min(max(0, cardOffsets[base] ?? 0), max(0, documentHeight - rect.height))
         cardOffsets[base] = offset; content.cardViewports[base] = rect
@@ -457,9 +463,12 @@ struct ProjectScrollHint: Equatable {
         }
         add(".status", x: tiny ? 0 : inner - statusWidth - row * 2, y: tiny ? row * 2 + NativeSpace.xxs : 0, width: tiny ? max(0, inner - row) : statusWidth, label: statusLabel, style: .status, fill: .projectStatusBg)
         let progressY = tiny ? row : row * 2
-        add(".progress", y: progressY, width: inner - row * 2, label: context.text("a11y.project_progress", values: ["project": project.title]), kind: .slider, style: tiny ? .progressSummary(project.progress) : .progress(project.progress), value: "\(project.progress)%", slider: NativeSliderMetadata(orientation: .horizontal, minimumValue: 0, maximumValue: 100, value: Double(project.progress)))
+        let percentWidth = tiny ? row * 2 : ceil(("100%" as NSString).size(withAttributes: [.font: NativeFont.badge]).width) + NativeSpace.lg
+        let percentX = tiny ? inner - percentWidth : inner - row - NativeSpace.xs - percentWidth
+        let progressWidth = tiny ? inner - row * 2 : max(row, percentX - NativeSpace.xs)
+        add(".progress", y: progressY, width: progressWidth, label: context.text("a11y.project_progress", values: ["project": project.title]), kind: .slider, style: tiny ? .progressSummary(project.progress) : .progress(project.progress), value: "\(project.progress)%", slider: NativeSliderMetadata(orientation: .horizontal, minimumValue: 0, maximumValue: 100, value: Double(project.progress)))
         content.tints[base + ".progress"] = project.colorHex
-        add(".percent", x: inner - row * 2, y: progressY, width: row * 2, label: "\(project.progress)%", kind: .text)
+        add(".percent", x: percentX, y: progressY, width: percentWidth, label: "\(project.progress)%", kind: .text)
         add(".target", y: tiny ? row * 3 + NativeSpace.xxs : row, width: tiny ? inner : inner - badgeWidth, label: context.text("projects.target", values: ["0": project.targetDay.map { ManagementCopy.date($0, context: context) } ?? context.text("projects.set_date")]))
         if !tiny, let target = project.targetDay {
             add(".badge", x: inner - badgeWidth, y: row, width: badgeWidth, label: DeadlineRows.badge(day: target, today: snapshot.clock.today, context: context), kind: .badge)
@@ -470,7 +479,7 @@ struct ProjectScrollHint: Equatable {
         content.displayLabels[base + ".addTodo"] = ""
         add(".menu", x: inner - row, y: controlsY, width: row, label: context.text("a11y.item_options", values: ["0": project.title]), style: .plain)
         content.displayLabels[base + ".menu"] = "···"
-        let scheduleRect = CGRect(x: x, y: rect.minY + scheduleY - offset, width: inner, height: row)
+        let scheduleRect = CGRect(x: x, y: rect.minY + scheduleY - offset, width: inner, height: scheduleHeight)
         renderSchedule(project, rect: scheduleRect, clip: bodyClip, snapshot: snapshot, hints: &hints, append: append)
     }
     private func renderSchedule(_ project: Project, rect: CGRect, clip: CGRect, snapshot: BoardSnapshot, hints: inout [String: ProjectScrollHint], append: (NativeRenderItem, ManagementCanvas.Style?) -> Void) {
