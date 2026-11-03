@@ -161,7 +161,7 @@ struct ProjectScrollHint: Equatable {
         self.context = context; surface = ManagementPanelView(focus: context.focus); content = ProjectDeckCanvas(focus: context.focus)
         surface.setAccessibilityIdentifier("panel.projects"); surface.setAccessibilityLabel(context.text("projects.title"))
         content.setAccessibilityIdentifier("projects.deck"); content.setAccessibilityLabel(context.text("a11y.projects"))
-        scroll.documentView = content; surface.addSubview(scroll)
+        scroll.invalidatesExposedCanvas = true; scroll.documentView = content; surface.addSubview(scroll)
         viewportObservation = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateNavigation() }
         }

@@ -8,11 +8,11 @@ Mac 바탕화면에서 일정과 프로젝트, 메모, 구독, 할 일, 습관, 
 
 ## 베타 다운로드
 
-Hannun Calendar **v1.0.0-beta.12**은 Apple Silicon과 macOS 14 이상을 지원합니다. 앱 버전은 **1.0**, 빌드는 **6**입니다.
+Hannun Calendar **v1.0.0-beta.13**은 Apple Silicon과 macOS 14 이상을 지원합니다. 앱 버전은 **1.0**, 빌드는 **7**입니다.
 
 beta.6 이하에는 업데이트 기능이 없어 업데이트 기능이 포함된 버전을 한 번 직접 설치해야 합니다. 이후 업데이트는 자동으로 확인하며 설치는 사용자가 선택합니다.
 
-[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.12/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.12/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.12/SHA256SUMS)
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.13/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.13/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.13/SHA256SUMS)
 
 초기 베타입니다. 업데이트 전에 중요한 일정과 보드 데이터를 백업하세요. 배포 파일의 검증 결과와 변경 사항·알려진 제한은 릴리스 노트를 확인하세요. 이번 준비에서는 실제 계정 연결과 실제 사용자 데이터 업그레이드를 검증하지 않았습니다. [INSTALL.md](INSTALL.md)를 확인하세요.
 

@@ -63,6 +63,23 @@ enum NativeAxis: String, Sendable { case horizontal, vertical }
     private let fade = CAGradientLayer()
     private let crossFade = CAGradientLayer()
     private var observation: NSObjectProtocol?
+    private weak var exposedDocument: NativeCanvasView?
+    private var exposedViewport: CGRect?
+    /// Opt in only for canvases that need newly revealed backing repainted.
+    var invalidatesExposedCanvas = false {
+        didSet {
+            guard oldValue != invalidatesExposedCanvas else { return }
+            resetExposedViewport()
+            if invalidatesExposedCanvas { invalidateNewlyExposedCanvas() }
+        }
+    }
+    override var documentView: NSView? {
+        didSet {
+            guard oldValue !== documentView else { return }
+            resetExposedViewport()
+            invalidateNewlyExposedCanvas()
+        }
+    }
     override init(frame: NSRect) {
         super.init(frame: frame); drawsBackground = false; autohidesScrollers = true; configureAxis()
         contentView.postsBoundsChangedNotifications = true
@@ -75,6 +92,7 @@ enum NativeAxis: String, Sendable { case horizontal, vertical }
     private func configureAxis() { hasVerticalScroller = allowsBothAxes || axis == .vertical; hasHorizontalScroller = allowsBothAxes || axis == .horizontal }
     override func layout() { super.layout(); updateFade() }
     func updateFade() {
+        invalidateNewlyExposedCanvas()
         guard let documentView else { contentView.layer?.mask = nil; return }
         let viewport = contentView.bounds, document = documentView.bounds
         if allowsBothAxes {
@@ -128,5 +146,31 @@ enum NativeAxis: String, Sendable { case horizontal, vertical }
         fade.mask = crossFade; layer.mask = fade
         CATransaction.commit()
     }
-    func dispose() { if let observation { NotificationCenter.default.removeObserver(observation) }; observation = nil; contentView.layer?.mask = nil }
+    private func resetExposedViewport() {
+        exposedDocument = nil; exposedViewport = nil
+    }
+    private func invalidateNewlyExposedCanvas() {
+        guard invalidatesExposedCanvas, let canvas = documentView as? NativeCanvasView,
+              !canvas.isHiddenOrHasHiddenAncestor else { resetExposedViewport(); return }
+        let current = canvas.visibleRect.intersection(canvas.bounds)
+        guard !current.isNull, !current.isInfinite, !current.isEmpty else { resetExposedViewport(); return }
+        let previous = exposedDocument === canvas ? exposedViewport : nil
+        exposedDocument = canvas; exposedViewport = current
+        guard let previous else { canvas.setNeedsDisplay(current); return }
+        let overlap = current.intersection(previous)
+        if overlap.isNull || overlap.isEmpty { canvas.setNeedsDisplay(current); return }
+        let exposed = [
+            CGRect(x: current.minX, y: current.minY, width: overlap.minX - current.minX, height: current.height),
+            CGRect(x: overlap.maxX, y: current.minY, width: current.maxX - overlap.maxX, height: current.height),
+            CGRect(x: overlap.minX, y: current.minY, width: overlap.width, height: overlap.minY - current.minY),
+            CGRect(x: overlap.minX, y: overlap.maxY, width: overlap.width, height: current.maxY - overlap.maxY)
+        ]
+        for rect in exposed where !rect.isEmpty { canvas.setNeedsDisplay(rect) }
+    }
+    override func viewDidHide() { super.viewDidHide(); resetExposedViewport() }
+    override func viewDidUnhide() { super.viewDidUnhide(); invalidateNewlyExposedCanvas() }
+    func dispose() {
+        if let observation { NotificationCenter.default.removeObserver(observation) }
+        observation = nil; invalidatesExposedCanvas = false; resetExposedViewport(); contentView.layer?.mask = nil
+    }
 }
