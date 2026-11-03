@@ -1,6 +1,6 @@
 # Install / 설치
 
-Hannun Calendar **v1.0.0-beta.11** targets Apple Silicon and macOS 14 or later. The app version is **1.0**, build **5**. Check the release notes for the final archive verification and known limitations.
+Hannun Calendar **v1.0.0-beta.12** targets Apple Silicon and macOS 14 or later. The app version is **1.0**, build **6**. Check the release notes for the final archive verification and known limitations.
 
 Versions through beta.6 do not include the updater, so install an updater-equipped release manually once. Later update checks run automatically, and installation requires your choice. Real-account connectivity and upgrades of real user data have not been verified in this preparation.
 
@@ -17,7 +17,7 @@ For rollback, quit the app, preserve current local data separately, and delibera
 
 ## 한국어
 
-Hannun Calendar **v1.0.0-beta.11**은 Apple Silicon과 macOS 14 이상용입니다. 앱 버전은 **1.0**, 빌드는 **5**입니다. 최종 배포 파일의 검증 결과와 알려진 제한은 릴리스 노트를 확인하세요.
+Hannun Calendar **v1.0.0-beta.12**은 Apple Silicon과 macOS 14 이상용입니다. 앱 버전은 **1.0**, 빌드는 **6**입니다. 최종 배포 파일의 검증 결과와 알려진 제한은 릴리스 노트를 확인하세요.
 
 beta.6 이하에는 업데이트 기능이 없으므로 업데이트 기능이 포함된 버전을 한 번 직접 설치해야 합니다. 이후 업데이트는 자동으로 확인하며 설치는 사용자가 선택합니다. 이번 준비에서는 실제 계정 연결과 실제 사용자 데이터 업그레이드를 검증하지 않았습니다.
 

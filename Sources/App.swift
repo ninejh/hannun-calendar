@@ -350,19 +350,82 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
         if case .failure = receipt { return receipt }
         // A save can finish while another editor or write is still outstanding.
         // Never discard those drafts, including an active marked-text session.
-        let marked = (panel.firstResponder as? NSTextView)?.hasMarkedText() == true
+        let marked = hasMarkedInput
         // Management forms also contain date and status edits which do not publish
         // a text draft. Keep an open form until its user resolves it.
-        let managementOpen = (root.controller(for: .projects) as? ProjectsPanelController)?.editor != nil ||
-            (root.controller(for: .deadlines) as? DeadlinesPanelController)?.editor != nil
+        let managementOpen = (root.controller(for: .projects) as? ProjectsPanelController)?.editor?.canDismiss == false ||
+            (root.controller(for: .deadlines) as? DeadlinesPanelController)?.editor?.canDismiss == false
         let unresolved = presentation.state.drafts.contains { key, value in
             // Search is a cached navigation query, not an edit to persisted data.
-            key != .search || value.textValue?.isComposing == true
+            key != .search || (value.textValue?.isComposing == true && marked)
         }
         guard !marked, !managementOpen, !unresolved, presentation.state.pending.isEmpty else {
             return .failure(AppFailure(code: .busyRetry, messageKey: "error.quit_unsaved", retryable: true), snapshot: nil)
         }
         return receipt
+    }
+    var hasMarkedInput: Bool {
+        func windows(_ window: NSWindow) -> [NSWindow] {
+            [window] + (window.childWindows ?? []).filter { $0.parent === window }.flatMap(windows)
+        }
+        if windows(panel).contains(where: { ($0.firstResponder as? NSTextView)?.hasMarkedText() == true }) { return true }
+        let forms = [(root.controller(for: .projects) as? ProjectsPanelController)?.editor,
+                     (root.controller(for: .deadlines) as? DeadlinesPanelController)?.editor]
+        return forms.compactMap { $0 }.contains { form in
+            [form.titleField, form.datePicker, form.hexField].contains { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }
+        }
+    }
+    private var blockingManagementEditor: ProjectDeadlineEditor? {
+        let editors = [(root.controller(for: .projects) as? ProjectsPanelController)?.editor,
+                       (root.controller(for: .deadlines) as? DeadlinesPanelController)?.editor]
+        return editors.compactMap { $0 }.first { !$0.canDismiss }
+    }
+    var canReviewTerminationDraft: Bool {
+        if blockingManagementEditor != nil { return true }
+        return presentation.state.drafts.contains { key, value in
+            switch key {
+            case .event(let id): return id != "new" || value.eventEditorValue?.quickAddContext?.kind == .event
+            case .quickAdd(let kind): return value.eventEditorValue?.quickAddContext?.kind == kind
+            case .todo, .todoNew: return value.todoEditorValue != nil
+            default: return false
+            }
+        }
+    }
+    @discardableResult func reviewTerminationDraft() -> Bool {
+        // Moving focus while an input method owns marked text can destroy it.
+        guard !hasMarkedInput else { return false }
+        showBoard()
+        if let editor = blockingManagementEditor {
+            if !editor.popover.isShown {
+                let anchor = CGRect(x: root.bounds.midX, y: root.bounds.midY, width: 1, height: 1)
+                editor.show(relativeTo: anchor, of: root)
+            }
+            return editor.popover.isShown
+        }
+        for (key, value) in presentation.state.drafts {
+            switch key {
+            case .event(let id):
+                if id == "new" {
+                    guard let origin = value.eventEditorValue?.quickAddContext, origin.kind == .event else { continue }
+                    root.route(.dismissOverlay)
+                    root.route(.openAdd(AddRequest(kind: .event, day: origin.day, projectID: origin.projectID))); return true
+                }
+                root.route(.dismissOverlay)
+                let anchor = StableAnchor(target: .event(id), boardRect: root.bounds)
+                root.route(.openEvent(eventID: id, anchor: anchor)); return true
+            case .quickAdd(let kind):
+                guard let origin = value.eventEditorValue?.quickAddContext, origin.kind == kind,
+                      let requested = AddRequest.Kind(rawValue: kind.rawValue) else { continue }
+                root.route(.dismissOverlay)
+                root.route(.openAdd(AddRequest(kind: requested, day: origin.day, projectID: origin.projectID))); return true
+            case .todo(let id) where value.todoEditorValue != nil:
+                root.route(.dismissOverlay); root.route(.openAdd(AddRequest(kind: .todo, todoID: id))); return true
+            case .todoNew(let day, let project) where value.todoEditorValue != nil:
+                root.route(.dismissOverlay); root.route(.openAdd(AddRequest(kind: .todo, day: day, projectID: project))); return true
+            default: continue
+            }
+        }
+        return false
     }
     func windowDidResize(_ notification: Notification) { viewportContext?.update(size: root.bounds.size); root.needsLayout = true }
     @discardableResult func hideBoard() async -> CommandReceipt {
@@ -543,6 +606,20 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
     }
 }
 
+func terminationFailureMessage(_ failure: AppFailure, strings: NativeStrings, language: String) -> String {
+    func available(_ key: String) -> Bool {
+        guard let value = strings.dictionaries["en"]?[key] else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    let codeKey = "error." + failure.code.rawValue.lowercased()
+    let key: String
+    if failure.code == .commitOutcomeUnknown { key = "error.transport_unknown" }
+    else if failure.messageKey != "error.generic", available(failure.messageKey) { key = failure.messageKey }
+    else if available(codeKey) { key = codeKey }
+    else { key = "error.generic" }
+    return strings.text(key, language: language)
+}
+
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     let composition: NativeAppComposition
     private let onReady: (@MainActor (NativeAppComposition) async -> Void)?
@@ -564,16 +641,34 @@ final class NativeLayoutViewportContext: @unchecked Sendable {
             let receipt = await self.composition.flushForTermination()
             if case .success = receipt {
                 self.composition.dispose(); sender.reply(toApplicationShouldTerminate: true)
-            } else {
+            } else if case .failure(let failure, _) = receipt {
                 self.terminating = false
                 sender.reply(toApplicationShouldTerminate: false)
                 self.composition.showBoard()
                 NSApp.activate(ignoringOtherApps: true)
                 let alert = NSAlert()
                 alert.messageText = self.composition.text("error.quit_unsaved_title")
-                alert.informativeText = self.composition.text("error.quit_unsaved")
-                alert.addButton(withTitle: self.composition.text("error.quit_unsaved_ok"))
-                alert.runModal()
+                let composing = self.composition.hasMarkedInput || self.composition.presentation.state.drafts[.notes]?.textValue?.isComposing == true
+                let review = !composing && failure.messageKey == "error.quit_unsaved" && self.composition.presentation.state.pending.isEmpty && self.composition.canReviewTerminationDraft
+                if composing {
+                    alert.informativeText = self.composition.text("error.quit_composition")
+                    alert.addButton(withTitle: self.composition.text("error.quit_unsaved_ok"))
+                } else if review {
+                    alert.informativeText = self.composition.text("error.quit_review_draft")
+                    alert.addButton(withTitle: self.composition.text("error.quit_review_action"))
+                    alert.addButton(withTitle: self.composition.text("error.quit_unsaved_ok"))
+                } else if failure.messageKey != "error.quit_unsaved" {
+                    alert.informativeText = terminationFailureMessage(failure, strings: self.composition.application.preferences.strings,
+                                                                       language: self.composition.presentation.state.snapshot.board.settings.language.rawValue)
+                    alert.addButton(withTitle: self.composition.text("error.quit_unsaved_ok"))
+                } else if !self.composition.presentation.state.pending.isEmpty {
+                    alert.informativeText = self.composition.text("error.quit_pending")
+                    alert.addButton(withTitle: self.composition.text("error.quit_unsaved_ok"))
+                } else {
+                    alert.informativeText = self.composition.text("error.quit_unsaved")
+                    alert.addButton(withTitle: self.composition.text("error.quit_unsaved_ok"))
+                }
+                if alert.runModal() == .alertFirstButtonReturn && review { _ = self.composition.reviewTerminationDraft() }
             }
         }
         return .terminateLater

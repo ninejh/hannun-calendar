@@ -36,14 +36,16 @@ enum OverlaySearch {
 /// Opening identity/version stays immutable across refreshes; only explicit reload replaces it.
 struct EventOverlayDraft {
     let original: EventRecord?
+    var keyOverride: DraftKey? = nil
+    var missingSource = false
     var event: EventDraft
     var projectID: UUID?
     var pinned: Bool
     var metadataRetryID: String?
     var expectedVersion: String?
     var repeatIntervalText: String?
-    var isReadOnly: Bool { original?.item.writable == false }
-    var key: DraftKey { .event(original?.id ?? "new") }
+    var isReadOnly: Bool { missingSource || original?.item.writable == false }
+    var key: DraftKey { keyOverride ?? .event(original?.id ?? "new") }
     init(record: EventRecord, snapshot: BoardSnapshot) {
         original = record; event = record.draft; expectedVersion = record.version
         projectID = snapshot.board.eventProjectLinks[record.id].flatMap(UUID.init(uuidString:))
@@ -58,6 +60,13 @@ struct EventOverlayDraft {
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
         let start = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: day.date(in: zone)) ?? day.date(in: zone)
         event = EventDraft(start: start, end: start.addingTimeInterval(3600), calendarID: destination?.id ?? "")
+    }
+    init(missingID: String, saved: EventEditorDraft) {
+        original = nil; event = saved.event; expectedVersion = saved.expectedVersion
+        keyOverride = .event(missingID); missingSource = true
+        if case .set(let value) = saved.metadata.projectID { projectID = value } else { projectID = nil }
+        if case .set(let value) = saved.metadata.pinned { pinned = value } else { pinned = false }
+        repeatIntervalText = saved.repeatIntervalText
     }
     func externalChange(in snapshot: BoardSnapshot) -> Bool {
         guard let original else { return false }

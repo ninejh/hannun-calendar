@@ -79,6 +79,9 @@ import AppKit
     private var presentationOwnsInlineFailure = false
     private(set) var editor: EventOverlayDraft?
     private(set) var todoEditor: TodoEditorDraft?
+    private var eventOpeningDraft: EventEditorDraft?
+    private var todoOpeningDraft: TodoEditorDraft?
+    private var todoSourceMissing = false
     private var todoDraftKey: DraftKey?
     private var todoAddContext: AddRequest?
     private var searchResults: [OverlaySearchResult] = []
@@ -228,7 +231,12 @@ import AppKit
             route = .event(id, PresentationAnchor(id: id, rect: source.boardRect)); incomingAnchor = source
             if replacesContent {
                 editor = state.snapshot.calendar.records.first { $0.id == id }.map { EventOverlayDraft(record: $0, snapshot: state.snapshot) }
-                inlineMessage = editor == nil ? text("error.missing_event") : nil; restoreDraft()
+                if editor == nil, let saved = state.drafts[.event(id)]?.eventEditorValue {
+                    editor = EventOverlayDraft(missingID: id, saved: saved)
+                    inlineMessage = text("event.deleted_draft")
+                } else { inlineMessage = editor == nil ? text("error.missing_event") : nil }
+                eventOpeningDraft = editor?.savedDraft
+                restoreDraft()
             }
         case .openAdd(let add):
             route = .newEvent; incomingAnchor = add.anchor
@@ -237,6 +245,8 @@ import AppKit
                 projectHasTarget = add.kind == .project && add.day != nil
                 editor = EventOverlayDraft(day: add.day ?? state.view.selectedDay, snapshot: state.snapshot, projectID: add.projectID)
                 todoAddContext = add
+                editor?.keyOverride = quickDraftKey(add.kind)
+                eventOpeningDraft = editor.map { eventDraft($0) }
                 if add.kind == .todo { prepareTodo(add) } else { todoEditor = nil; todoDraftKey = nil; restoreDraft() }
             }
         case .openSearch(let query, let source):
@@ -277,18 +287,42 @@ import AppKit
         default: false
         }
     }
+    private func quickDraftKey(_ kind: AddRequest.Kind) -> DraftKey? {
+        switch kind { case .event: .event("new"); case .project: .quickAdd(.project); case .countdown: .quickAdd(.countdown); case .todo: nil }
+    }
+    private func eventDraft(_ editor: EventOverlayDraft) -> EventEditorDraft {
+        var draft = editor.savedDraft
+        if case .newEvent = route, let kind = QuickAddDraftKind(rawValue: quickKind) {
+            draft.quickAddContext = QuickAddDraftContext(kind: kind, day: todoAddContext?.day, projectID: todoAddContext?.projectID,
+                                                         projectHasTarget: projectHasTarget, quickID: quickID)
+        }
+        return draft
+    }
     private func prepareTodo(_ add: AddRequest) {
         let key: DraftKey = add.todoID.map { .todo($0) } ?? .todoNew(add.day, add.projectID)
         todoDraftKey = key
-        if let draft = state.drafts[key]?.todoEditorValue { todoEditor = draft; return }
         let original = add.todoID.flatMap { id in state.snapshot.board.todos.first { $0.id == id } }
-        guard add.todoID == nil || original != nil else { todoEditor = nil; inlineMessage = text("todo.conflict"); return }
-        todoEditor = TodoEditorDraft(todo: original, day: add.day, projectID: add.projectID)
+        todoSourceMissing = add.todoID != nil && original == nil
+        if todoSourceMissing {
+            todoOpeningDraft = nil
+            todoEditor = state.drafts[key]?.todoEditorValue
+            inlineMessage = text("todo.deleted_draft")
+            return
+        }
+        let opening = TodoEditorDraft(todo: original, day: add.day, projectID: add.projectID)
+        todoOpeningDraft = opening
+        todoEditor = state.drafts[key]?.todoEditorValue ?? opening
     }
     private func restoreDraft() {
         guard let key = editor?.key else { return }
-        if let saved = state.drafts[key]?.eventEditorValue { editor?.restore(saved) }
-        else if case .event(let saved) = state.drafts[key] { editor?.event = saved }
+        if let saved = state.drafts[key]?.eventEditorValue {
+            editor?.restore(saved)
+            if case .newEvent = route, let origin = saved.quickAddContext {
+                if todoAddContext?.day != origin.day || todoAddContext?.projectID != origin.projectID { inlineMessage = text("event.draft_context") }
+                projectHasTarget = origin.projectHasTarget; quickID = origin.quickID
+                if let kind = AddRequest.Kind(rawValue: origin.kind.rawValue) { todoAddContext = AddRequest(kind: kind, day: origin.day, projectID: origin.projectID) }
+            }
+        } else if case .event(let saved) = state.drafts[key] { editor?.event = saved }
         repeatIntervalText = editor?.repeatIntervalText ?? String(editor?.event.recurrence?.interval ?? 1)
     }
     private func bindExistingPending() {
@@ -538,8 +572,8 @@ import AppKit
         if let existing = datePickers[id] { picker = existing } else {
             picker = NativeDatePicker(label: text(key), identifier: "overlay." + id, timeZone: TimeZone(identifier: state.snapshot.clock.timeZone) ?? .current)
             picker.target = self; picker.action = #selector(dateChanged(_:)); datePickers[id] = picker; content.addSubview(picker)
-            picker.dateValue = value
         }
+        if picker.currentEditor() == nil && picker.dateValue != value { picker.dateValue = value }
         usedDates.insert(id); picker.setAccessibilityLabel(text(key)); picker.isEnabled = enabled
         picker.datePickerElements = time ? [.yearMonthDay, .hourMinute] : [.yearMonthDay]
         picker.cell?.setAccessibilityLabel(text(key)); picker.cell?.setAccessibilityIdentifier("overlay." + id)
@@ -669,9 +703,10 @@ import AppKit
         }
         let saveKey = editor.metadataRetryID != nil ? "error.partial_retry" : quickKind == "project" ? "projects.submit_add" : quickKind == "countdown" ? "deadlines.submit_add" : editor.isReadOnly ? "event.save_link" : editor.original == nil ? "event.submit_add" : "event.save_changes"
         if canDelete(editor) { row("overlay.delete", label: text("event.delete"), enabled: !busy); renderItems[renderItems.count - 1].color = .danger }
-        row("overlay.save", label: text(busy ? "toast.event_saving" : saveKey), enabled: !busy, fill: .fill)
+        row("overlay.save", label: text(busy ? "toast.event_saving" : saveKey), enabled: !busy && !editor.missingSource, fill: .fill)
         if unknownOperation != nil { row("overlay.reconcile", label: text("error.retry_action")) }
         if case .newEvent = route { row("overlay.cancel", label: text("event.discard_changes")) }
+        else if editor.missingSource { row("overlay.cancel", label: text("event.discard_changes")) }
         else { y += NativeSize.overflowEdge }
     }
     private func renderSearch() {
@@ -837,7 +872,7 @@ import AppKit
         case "overlay.pin": guard !busy else { return }; editor?.pinned.toggle(); saveDraft(); render()
         case "overlay.calendar", "overlay.project", "overlay.kind", "overlay.repeat", "overlay.repeatEnd", "overlay.todo.project", "overlay.todo.repeat", "overlay.focus.duration", "overlay.break.duration":
             _ = showSelectionMenu(id)
-        case "overlay.project.target": projectHasTarget.toggle(); render()
+        case "overlay.project.target": projectHasTarget.toggle(); saveDraft(); render()
         case "overlay.save": if quickKind == "todo" { saveTodo() } else { save() }
         case "overlay.todo.complete": completeTodo()
         case "overlay.todo.date":
@@ -917,8 +952,22 @@ import AppKit
             return showChoices(at: item, selected: todoEditor?.projectID?.uuidString ?? "", options: options) { [weak self] raw in self?.todoEditor?.projectID = UUID(uuidString: raw); self?.saveDraft() }
         case "overlay.kind":
             return showChoices(at: item, selected: quickKind, options: ["event", "countdown", "project", "todo"].map { ($0, text("quick.kind_" + $0)) }) { [weak self] raw in
-                guard let self else { return }; self.saveDraft(); self.quickKind = raw
-                if raw == "todo" { self.prepareTodo(self.todoAddContext ?? AddRequest(kind: .todo)) }
+                guard let self, !self.composing, let selected = AddRequest.Kind(rawValue: raw) else { return }
+                self.saveDraft(); self.quickKind = raw
+                var next = self.todoAddContext ?? AddRequest(kind: selected); next.kind = selected; next.todoID = nil
+                self.todoAddContext = next
+                if selected == .todo { self.prepareTodo(next) }
+                else {
+                    self.editor?.keyOverride = self.quickDraftKey(selected)
+                    if var opening = self.eventOpeningDraft, let kind = QuickAddDraftKind(rawValue: raw) {
+                        opening.quickAddContext = QuickAddDraftContext(kind: kind, day: next.day, projectID: next.projectID,
+                                                                       projectHasTarget: self.projectHasTarget, quickID: self.quickID)
+                        self.eventOpeningDraft = opening
+                    }
+                    self.restoreDraft()
+                }
+                self.presentedRoute = .openAdd(next)
+                self.context.routing.route(.openAdd(next))
             }
         case "overlay.focus.duration", "overlay.break.duration":
             let focus = id == "overlay.focus.duration"
@@ -1016,7 +1065,7 @@ import AppKit
         }
     }
     private var composing: Bool {
-        notes.hasMarkedText() || textFields.values.contains { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }
+        notes.hasMarkedText() || textFields.values.contains { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true } || datePickers.values.contains { ($0.currentEditor() as? NSTextView)?.hasMarkedText() == true }
     }
     private func canDelete(_ draft: EventOverlayDraft) -> Bool {
         guard case .event = route, let original = draft.original, !deleteFinished,
@@ -1075,8 +1124,14 @@ import AppKit
     private func saveDraft() {
         guard !draftCommitted else { return }
         if quickKind == "todo" {
-            if let todoEditor, let todoDraftKey { context.presentation.setDraft(todoDraftKey, value: .todoEditor(todoEditor)) }
-        } else if let editor { context.presentation.setDraft(editor.key, value: .eventEditor(editor.savedDraft)) }
+            guard let todoEditor, let todoDraftKey else { return }
+            if !busy, !composing, context.presentation.state.drafts[todoDraftKey] == nil, todoEditor == todoOpeningDraft { return }
+            context.presentation.setDraft(todoDraftKey, value: .todoEditor(todoEditor))
+        } else if let editor {
+            let draft = eventDraft(editor)
+            if !busy, !composing, context.presentation.state.drafts[editor.key] == nil, draft == eventOpeningDraft { return }
+            context.presentation.setDraft(editor.key, value: .eventEditor(draft))
+        }
     }
     private func cancelDraft() {
         guard !composing else { return }
@@ -1086,6 +1141,7 @@ import AppKit
     }
     private func saveTodo() {
         guard !busy, !composing, let draft = todoEditor, let key = todoDraftKey else { return }
+        guard !todoSourceMissing else { showFailure(AppFailure(code: .boardConflict, messageKey: "todo.deleted_draft")); return }
         let intent: PanelIntent
         switch draft.intent(snapshot: state.snapshot) {
         case .failure(let failure): showFailure(failure); return
@@ -1135,6 +1191,7 @@ import AppKit
     private func save() {
         if quickKind == "todo" { saveTodo(); return }
         guard deleteStage == nil, !busy, !composing, var editor else { return }
+        guard !editor.missingSource else { showFailure(AppFailure(code: .eventNotFound, messageKey: "event.deleted_draft")); return }
         if editor.original == nil, editor.event.recurrence != nil, quickKind == "event" {
             guard let interval = Int(repeatIntervalText), (1...999).contains(interval) else {
                 showFailure(AppFailure(code: .validationFailed, field: .event(.recurrence), messageKey: "event.repeat_invalid_interval")); return
@@ -1165,7 +1222,7 @@ import AppKit
         busy = true; inlineMessage = nil; render()
         guard let handle = context.presentation.send(.command(command, feedback: PresentationFeedback(messageKey: feedback))) else { busy = false; render(); return }
         let presentation = context.presentation
-        let submittedDraft = editor.savedDraft
+        let submittedDraft = eventDraft(editor)
         Task { [weak self, weak presentation] in
             let receipt = await handle.settled.value
             // Accepted writes settle shared drafts even after root disposes the surface.

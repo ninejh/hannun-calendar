@@ -10,7 +10,7 @@
     <key>CFBundleLocalizations</key><array><string>en</string><string>ko</string></array>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>5</string>
+    <key>CFBundleVersion</key><string>6</string>
     <key>SUFeedURL</key><string>https://hannun-calendar.vercel.app/appcast.xml</string>
     <key>SUPublicEDKey</key><string>RpAUk8ZqvZYRwF/mxg0Uw2UZhrImaUxYIHahXA+qCV4=</string>
     <key>SUEnableInstallerLauncherService</key><true/>

@@ -8,11 +8,11 @@ Move and resize the calendar and four configurable panels on a free grid. Hold a
 
 ## Beta download
 
-Hannun Calendar **v1.0.0-beta.11** targets Apple Silicon and macOS 14 or later. The app version is **1.0**, build **5**.
+Hannun Calendar **v1.0.0-beta.12** targets Apple Silicon and macOS 14 or later. The app version is **1.0**, build **6**.
 
 Versions through beta.6 do not include the updater and need one manual installation of an updater-equipped release. Later checks run automatically; installation requires your choice.
 
-[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.11/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.11/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.11/SHA256SUMS)
+[DMG](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.12/Hannun-Calendar-arm64.dmg) · [ZIP](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.12/Hannun-Calendar-arm64.zip) · [SHA256SUMS](https://github.com/ninejh/hannun-calendar/releases/download/v1.0.0-beta.12/SHA256SUMS)
 
 This is an early beta. Back up important calendar and board data before updating. See the release notes for exact artifact verification, changes, and known limitations. Real-account connectivity and upgrading real user data have not been verified in this preparation. See [INSTALL.md](INSTALL.md).
 

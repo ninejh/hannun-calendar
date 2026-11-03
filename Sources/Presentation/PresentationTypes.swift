@@ -7,14 +7,23 @@ struct TextDraft: Equatable, Sendable {
     var scrollOrigin: CGPoint = .zero
     var isComposing: Bool { markedRange.map { $0.location != NSNotFound } ?? false }
 }
+enum QuickAddDraftKind: String, Hashable, Sendable { case event, project, countdown }
+struct QuickAddDraftContext: Equatable, Sendable {
+    var kind: QuickAddDraftKind
+    var day: DateOnly?
+    var projectID: UUID?
+    var projectHasTarget: Bool
+    var quickID: UUID
+}
 enum DraftKey: Hashable, Sendable {
-    case notes, search, project(UUID), countdown(UUID), event(String), subscription(UUID), todo(UUID), todoNew(DateOnly?, UUID?), habit(UUID)
+    case notes, search, project(UUID), countdown(UUID), event(String), quickAdd(QuickAddDraftKind), subscription(UUID), todo(UUID), todoNew(DateOnly?, UUID?), habit(UUID)
 }
 struct EventEditorDraft: Equatable, Sendable {
     var event: EventDraft
     var metadata: MetadataPatch = MetadataPatch()
     var expectedVersion: String? = nil
     var repeatIntervalText: String? = nil
+    var quickAddContext: QuickAddDraftContext? = nil
 }
 struct TodoEditorDraft: Equatable, Sendable {
     var id: UUID
